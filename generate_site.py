@@ -1,9 +1,9 @@
 """
-generate_site.py — reads housing_dev.db and produces index.html
+generate_site.py — reads housing_dev.db and produces output/index.html
 
 Usage:
-    python3 generate_site.py            # writes index.html next to this script
-    python3 generate_site.py out.html   # writes to a custom path
+    python3 generate_site.py               # writes output/index.html
+    python3 generate_site.py path/out.html # writes to a custom path
 """
 
 import os
@@ -11,9 +11,11 @@ import sys
 import sqlite3
 import json
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-DB   = os.path.join(HERE, 'housing_dev.db')
-OUT  = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, 'index.html')
+HERE   = os.path.dirname(os.path.abspath(__file__))
+DB     = os.path.join(HERE, 'housing_dev.db')
+OUTPUT = os.path.join(HERE, 'output')
+os.makedirs(OUTPUT, exist_ok=True)
+OUT    = sys.argv[1] if len(sys.argv) > 1 else os.path.join(OUTPUT, 'index.html')
 
 STATE_TARGET = 8237
 
@@ -365,6 +367,13 @@ html = f"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Vermont Housing Production: What's Actually Being Built?</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.fullscreen/dist/Control.FullScreen.css"/>
+<script src="https://unpkg.com/leaflet.fullscreen/dist/Control.FullScreen.umd.js"></script>
 <style>
   :root {{
     --green:  #074B41;
@@ -646,6 +655,35 @@ html = f"""<!DOCTYPE html>
     text-align: center;
   }}
   .disclaimer-bar strong {{ color: #4a3a10; }}
+
+  /* Map section */
+  #vt-map {{
+    height: 580px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    margin: 1.5rem 0 1rem;
+  }}
+  .map-legend {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem 1.4rem;
+    font-family: system-ui, sans-serif;
+    font-size: 0.82rem;
+    color: var(--muted);
+    margin-bottom: 0.5rem;
+  }}
+  .map-legend-item {{ display: flex; align-items: center; gap: 0.4rem; }}
+  .map-legend-dot {{
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }}
+  .map-note {{
+    font-family: system-ui, sans-serif;
+    font-size: 0.82rem;
+    color: var(--muted);
+    margin-top: 0.4rem;
+  }}
 </style>
 </head>
 <body>
@@ -981,6 +1019,24 @@ html = f"""<!DOCTYPE html>
 
 </div>
 
+<section id="map-section">
+<div class="container">
+  <h2>Where Projects Are Being Built</h2>
+  <p>Each dot represents a DHCD-recorded housing project (2016&ndash;2025). Projects are split into two independent cluster groups&mdash;inside and outside Act&nbsp;181 exemption areas&mdash;so clusters never mix the two. Zoom in to explore individual projects; click any dot for details.</p>
+
+  <div id="vt-map"></div>
+
+  <div class="map-legend">
+    <span style="font-weight:600; color:var(--text); font-family:system-ui,sans-serif;">Housing type:</span>
+    <span class="map-legend-item"><span class="map-legend-dot" style="background:#8ED4DA;"></span> Multi-Family</span>
+    <span class="map-legend-item"><span class="map-legend-dot" style="background:#F89C45;"></span> Single-Family</span>
+    <span class="map-legend-item"><span class="map-legend-dot" style="background:#F2644A;"></span> Other Residential</span>
+    <span class="map-legend-item"><span class="map-legend-dot" style="background:#aaa;"></span> Other / Unknown</span>
+  </div>
+  <p class="map-note">Green shading = Act&nbsp;181 exemption area boundary. Cluster color: <strong style="color:#F2644A">red = inside</strong>, <strong style="color:#2a8a6e">green = outside</strong>. Use the layer control (top-right) to toggle each group independently.</p>
+</div>
+</section>
+
 <footer>
   <p>Analysis by <strong style="color:#fff;">Let's Build Homes</strong> · Data current through 2025</p>
   <p style="margin-top:0.3rem;"><a href="#methodology">Methodology &amp; Sources</a></p>
@@ -1171,6 +1227,140 @@ new Chart(document.getElementById('exemptYearChart'), {{
     }},
   }},
 }});
+
+// ── Leaflet map ────────────────────────────────────────────────────────────
+(function () {{
+  const map = L.map('vt-map', {{ zoomSnap: 0.5 }}).setView([44.0, -72.7], 8);
+
+  L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    maxZoom: 19,
+  }}).addTo(map);
+
+  new L.Control.FullScreen().addTo(map);
+
+  // Color by site_type_general
+  const TYPE_COLORS = {{
+    'MULTI-FAMILY DWELLING':  '#8ED4DA',
+    'SINGLE FAMILY DWELLING': '#F89C45',
+    'OTHER RESIDENTIAL':      '#F2644A',
+  }};
+
+  function dotColor(type) {{
+    return TYPE_COLORS[type] || '#aaaaaa';
+  }}
+
+  // Custom cluster icon: shows sum of unit_count across all child markers,
+  // not a raw point count. Saturation scales logarithmically with unit total
+  // (anchored: ~10 units = muted, ~10,000+ units = full color), keeping the
+  // two-tone green/red scheme while adding a magnitude signal.
+  function makeClusterIcon(cluster, isInside) {{
+    const total = cluster.getAllChildMarkers()
+      .reduce((sum, m) => sum + (m._units || 1), 0);
+    const label = total >= 1000 ? (total / 1000).toFixed(1) + 'k' : String(total);
+    const size  = total >= 500 ? 44 : total >= 100 ? 36 : 30;
+
+    // t in [0,1]: log10 scale anchored at 1 unit (min) → 500 units (max sat)
+    const t = Math.min(Math.log10(Math.max(total, 1)) / Math.log10(500), 1.0);
+    // inside: red hsl(10, 22%→86%, 60%)  |  outside: green hsl(158, 15%→65%, 42%)
+    const bg = isInside
+      ? `hsl(10,${{Math.round(22 + t * 64)}}%,60%)`
+      : `hsl(158,${{Math.round(15 + t * 50)}}%,42%)`;
+
+    return L.divIcon({{
+      html: `<div style="
+        width:${{size}}px; height:${{size}}px;
+        background:${{bg}}; color:#fff;
+        border-radius:50%; border:2px solid #fff;
+        display:flex; align-items:center; justify-content:center;
+        font-family:system-ui,sans-serif; font-size:${{size >= 40 ? 11 : 10}}px;
+        font-weight:700; line-height:1; box-shadow:0 1px 4px rgba(0,0,0,0.35);
+      ">${{label}}</div>`,
+      className: '',
+      iconSize: L.point(size, size),
+      iconAnchor: L.point(size / 2, size / 2),
+    }});
+  }}
+
+  // Two separate cluster groups: inside and outside exemption area.
+  // Keeping them separate guarantees MarkerCluster never merges a point from
+  // inside the boundary with one from outside.
+  const insideCluster = L.markerClusterGroup({{
+    chunkedLoading: true,
+    maxClusterRadius: 40,
+    iconCreateFunction: c => makeClusterIcon(c, true),
+  }});
+  const outsideCluster = L.markerClusterGroup({{
+    chunkedLoading: true,
+    maxClusterRadius: 40,
+    iconCreateFunction: c => makeClusterIcon(c, false),
+  }});
+
+  function makeMarker(feature, isInside) {{
+    const p     = feature.properties;
+    const color = dotColor(p.type);
+    const latlng = [
+      feature.geometry.coordinates[1],
+      feature.geometry.coordinates[0],
+    ];
+    const marker = L.circleMarker(latlng, {{
+      radius:      5,
+      fillColor:   color,
+      color:       isInside ? '#ffffff' : '#333333',
+      weight:      1.5,
+      fillOpacity: 0.88,
+    }});
+    const typeLabel = {{
+      'MULTI-FAMILY DWELLING':  'Multi-Family',
+      'SINGLE FAMILY DWELLING': 'Single-Family',
+      'OTHER RESIDENTIAL':      'Other Residential',
+    }}[p.type] || (p.type || 'Other');
+    marker._units = p.units;
+    marker.bindPopup(
+      `<b style="font-family:system-ui,sans-serif">${{p.addr || 'Address unknown'}}</b><br>
+       <span style="font-family:system-ui,sans-serif;font-size:0.88em">
+         ${{typeLabel}} &middot; ${{p.units}} unit${{p.units !== 1 ? 's' : ''}}<br>
+         Year built: ${{p.year || 'unknown'}}<br>
+         ${{isInside
+           ? '<span style="color:#074B41">&#10003; Inside exemption area</span>'
+           : '<span style="color:#F2644A">&#10007; Outside exemption area</span>'}}
+       </span>`,
+      {{ maxWidth: 240 }}
+    );
+    return marker;
+  }}
+
+  // Load exemption area polygon overlay
+  fetch('exemption_union.geojson')
+    .then(r => r.json())
+    .then(data => {{
+      L.geoJSON(data, {{
+        style: {{
+          color:       '#074B41',
+          weight:      1.5,
+          fillColor:   '#074B41',
+          fillOpacity: 0.12,
+        }}
+      }}).addTo(map);
+    }})
+    .catch(() => console.warn('exemption_union.geojson not found — run make map_data'));
+
+  // Load point layers and add to cluster groups
+  Promise.all([
+    fetch('dhcd_inside_exemption.geojson').then(r => r.json()),
+    fetch('dhcd_outside_exemption.geojson').then(r => r.json()),
+  ]).then(([inside, outside]) => {{
+    inside.features.forEach(f  => insideCluster.addLayer(makeMarker(f, true)));
+    outside.features.forEach(f => outsideCluster.addLayer(makeMarker(f, false)));
+    insideCluster.addTo(map);
+    outsideCluster.addTo(map);
+
+    L.control.layers(null, {{
+      'Inside exemption area':  insideCluster,
+      'Outside exemption area': outsideCluster,
+    }}, {{ collapsed: false }}).addTo(map);
+  }}).catch(() => console.warn('DHCD point GeoJSON files not found — run make map_data'));
+}})();
 </script>
 </body>
 </html>

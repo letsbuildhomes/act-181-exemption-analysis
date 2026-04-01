@@ -4,7 +4,7 @@ __pycache__/
 *.py[cod]
 
 # Generated outputs (reproducible via make)
-index.html
+output/
 .stamps/
 
 # Generated database (reproducible via process_all.py)
