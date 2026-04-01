@@ -1,0 +1,17 @@
+# uv / Python environment
+.venv/
+__pycache__/
+*.py[cod]
+
+# Generated outputs (reproducible via make)
+index.html
+
+# Generated database (reproducible via process_all.py)
+housing_dev.db
+
+# SQLite transient files
+*.db-journal
+*.db-wal
+
+# Temp / scratch files
+*.tmp
