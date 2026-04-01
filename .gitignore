@@ -5,6 +5,7 @@ __pycache__/
 
 # Generated outputs (reproducible via make)
 index.html
+.stamps/
 
 # Generated database (reproducible via process_all.py)
 housing_dev.db
