@@ -51,8 +51,17 @@ parcel_groups = (esite[esite['parcelnum_clean'] != '']
          parcel_year_min=('YEARBUILT','min'),
          parcel_year_max=('YEARBUILT','max'),
          parcel_lat=('GPSY','mean'),
-         parcel_lon=('GPSX','mean'))
+         parcel_lon=('GPSX','mean'),
+         parcel_category=('ParcelCategory','first'))
     .reset_index())
+
+esite_parcel_groups_db = parcel_groups.rename(columns={
+    'TOWNNAME':          'town_name',
+    'parcelnum_clean':   'parcelnum',
+    'parcel_site_count': 'site_count',
+    'parcel_year_min':   'year_min',
+    'parcel_year_max':   'year_max',
+})
 
 parcel_subdivisions = parcel_groups[parcel_groups['parcel_site_count'] >= 4].copy()
 parcel_subdivisions['parcel_group_id'] = ['PARCEL_' + str(i+1).zfill(4)
@@ -159,6 +168,7 @@ cluster_summary_db = cluster_summary[[
     'year_min','year_max','centroid_lat','centroid_lon','method'
 ]].copy()
 cluster_summary_db.to_sql('project_groups', con, if_exists='replace', index=False)
+esite_parcel_groups_db.to_sql('esite_parcel_groups', con, if_exists='replace', index=False)
 
 # Add project_id column to dhcd_new_housing
 try:
