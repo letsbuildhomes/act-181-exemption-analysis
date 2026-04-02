@@ -1,9 +1,8 @@
 """
 build_project_clusters.py
 
-Groups individual DHCD housing sites into likely "development projects" using:
-  1. PARCELNUM duplicates from ESITE layer (definitive — same parcel = same project)
-  2. DBSCAN spatial clustering on DHCD coordinates (approximate — nearby + same period)
+Groups individual DHCD housing sites into likely "development projects" using
+DBSCAN spatial clustering on DHCD coordinates (nearby + same period).
 
 Adds a `project_cluster_id` column to dhcd_new_housing and creates a
 `project_groups` summary table.
@@ -35,42 +34,7 @@ con.close()
 
 print(f"DHCD records loaded: {len(dhcd):,}")
 
-# ── 2. ESITE parcel-based groups (definitive) ────────────────────────────────
-esite = pd.read_csv('data/esite_parcels.csv', dtype=str)
-esite['GPSX']      = pd.to_numeric(esite['GPSX'], errors='coerce')
-esite['GPSY']      = pd.to_numeric(esite['GPSY'], errors='coerce')
-esite['YEARBUILT'] = pd.to_numeric(esite['YEARBUILT'], errors='coerce')
-esite['UNITCOUNT'] = pd.to_numeric(esite['UNITCOUNT'], errors='coerce')
-esite['parcelnum_clean'] = esite['PARCELNUM'].fillna('').str.strip().str.upper()
-
-# Build parcel groups: town + parcelnum with ≥2 sites
-parcel_groups = (esite[esite['parcelnum_clean'] != '']
-    .groupby(['TOWNNAME', 'parcelnum_clean'])
-    .agg(parcel_site_count=('ESITEID','count'),
-         parcel_units=('UNITCOUNT','sum'),
-         parcel_year_min=('YEARBUILT','min'),
-         parcel_year_max=('YEARBUILT','max'),
-         parcel_lat=('GPSY','mean'),
-         parcel_lon=('GPSX','mean'),
-         parcel_category=('ParcelCategory','first'))
-    .reset_index())
-
-esite_parcel_groups_db = parcel_groups.rename(columns={
-    'TOWNNAME':          'town_name',
-    'parcelnum_clean':   'parcelnum',
-    'parcel_site_count': 'site_count',
-    'parcel_year_min':   'year_min',
-    'parcel_year_max':   'year_max',
-})
-
-parcel_subdivisions = parcel_groups[parcel_groups['parcel_site_count'] >= 4].copy()
-parcel_subdivisions['parcel_group_id'] = ['PARCEL_' + str(i+1).zfill(4)
-                                           for i in range(len(parcel_subdivisions))]
-print(f"\nParcel-based subdivisions (≥4 sites same parcel): {len(parcel_subdivisions)}")
-print(f"Sites in parcel groups: {parcel_subdivisions['parcel_site_count'].sum():.0f}")
-print(f"Units in parcel groups: {parcel_subdivisions['parcel_units'].sum():.0f}")
-
-# ── 3. DBSCAN spatial clustering on DHCD ────────────────────────────────────
+# ── 2. DBSCAN spatial clustering on DHCD ────────────────────────────────────
 # Only cluster single-family records (multi-unit already represent a project)
 # Use 3-year rolling windows to group by period
 # Radius: 300m  |  Min samples: 4
@@ -108,7 +72,7 @@ print(f"  Distinct clusters found:  {sf['cluster_label'].max() + 1:,}")
 print(f"  Sites in clusters:        {n_clustered:,}  ({n_clustered/len(sf)*100:.1f}% of SFH)")
 print(f"  Isolated (noise) sites:   {(sf['cluster_label'] == -1).sum():,}")
 
-# ── 4. Build cluster-level summary ───────────────────────────────────────────
+# ── 3. Build cluster-level summary ───────────────────────────────────────────
 # Assign project IDs
 sf['project_id'] = sf['cluster_label'].apply(
     lambda x: f'CLUSTER_{x+1:05d}' if x >= 0 else None)
@@ -148,14 +112,7 @@ top = cluster_summary.nlargest(20, 'site_count')[
     ['project_id','town','site_count','total_units','year_min','year_max','urban_rural_tier']]
 print(top.to_string(index=False))
 
-# ── 5. Validate: compare top ESITE parcel groups to DBSCAN clusters ──────────
-print(f"\n=== Validation: ESITE parcel groups vs DBSCAN clusters ===")
-print("Top ESITE parcel groups (≥20 sites):")
-top_parcel = parcel_subdivisions[parcel_subdivisions['parcel_site_count'] >= 20].sort_values(
-    'parcel_site_count', ascending=False)
-print(top_parcel[['TOWNNAME','parcelnum_clean','parcel_site_count','parcel_year_min','parcel_year_max','parcel_lat','parcel_lon']].to_string(index=False))
-
-# ── 6. Write project_groups table to SQLite ──────────────────────────────────
+# ── 4. Write project_groups table to SQLite ──────────────────────────────────
 con = sqlite3.connect(DB)
 cur = con.cursor()
 
@@ -168,7 +125,6 @@ cluster_summary_db = cluster_summary[[
     'year_min','year_max','centroid_lat','centroid_lon','method'
 ]].copy()
 cluster_summary_db.to_sql('project_groups', con, if_exists='replace', index=False)
-esite_parcel_groups_db.to_sql('esite_parcel_groups', con, if_exists='replace', index=False)
 
 # Add project_id column to dhcd_new_housing
 try:

@@ -38,9 +38,9 @@ $(STAMPS)/rural_urban: add_rural_urban.py housing_dev.db data/town_population_20
 	uv run python3 add_rural_urban.py
 	touch $@
 
-# ── Step 3: Build project clusters from ESITE parcels ────────────────────────
+# ── Step 3: Build project clusters (DBSCAN spatial clustering) ───────────────
 
-$(STAMPS)/clusters: build_clusters.py $(STAMPS)/rural_urban data/esite_parcels.csv
+$(STAMPS)/clusters: build_clusters.py $(STAMPS)/rural_urban
 	uv run python3 build_clusters.py
 	touch $@
 

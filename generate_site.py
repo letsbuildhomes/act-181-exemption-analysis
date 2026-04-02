@@ -17,7 +17,9 @@ OUTPUT = os.path.join(HERE, 'output')
 os.makedirs(OUTPUT, exist_ok=True)
 OUT    = sys.argv[1] if len(sys.argv) > 1 else os.path.join(OUTPUT, 'index.html')
 
-STATE_TARGET = 8237
+STATE_TARGET_LOWER = 5573    # Act 47 (2023) minimum annual housing target
+STATE_TARGET_UPPER = 8237    # Act 47 (2023) upper annual housing target
+VAPDA_INSIDE_PCT   = 0.60    # VAPDA projection: share of future housing inside growth areas
 
 con = sqlite3.connect(DB)
 con.row_factory = sqlite3.Row
@@ -129,71 +131,7 @@ rural_sfh_pct = round(
     / type_total * 100, 1
 ) if type_total else 0
 
-# ── 4. Combined large-project table (DHCD top + ESITE subdivisions) ────────────
-dhcd_top = con.execute('''
-    SELECT
-        'DHCD'                             AS source,
-        d.address,
-        d.town_name_title                  AS town,
-        COALESCE(t.urban_rural_tier,'—')   AS tier,
-        d.site_type                        AS category,
-        d.unit_count                       AS units,
-        CAST(d.year_built AS INTEGER)      AS year_label
-    FROM dhcd_new_housing d
-    LEFT JOIN town_lookup t ON UPPER(d.town_name_title)=UPPER(t.townname_title)
-    WHERE d.year_built BETWEEN 2016 AND 2025
-      AND LOWER(COALESCE(d.site_type,'')) NOT IN (
-          'camp','seasonal home','seasonal camp','camp/seasonal home','seasonal')
-      AND d.unit_count >= 20
-    ORDER BY d.unit_count DESC
-    LIMIT 12
-''').fetchall()
-
-esite_top = con.execute('''
-    SELECT
-        'ESITE (parcel)'  AS source,
-        COALESCE(e.town_name, '—') AS town_raw,
-        COALESCE(t.urban_rural_tier,'—') AS tier,
-        CASE e.parcel_category
-            WHEN 'C'  THEN 'Condo'
-            WHEN 'M'  THEN 'Multi-unit'
-            WHEN 'R1' THEN 'Single-family'
-            WHEN 'R2' THEN 'Single-family'
-            WHEN 'F'  THEN 'Residential / Farm'
-            WHEN ''   THEN 'Residential'
-            ELSE 'Residential'
-        END               AS category,
-        e.site_count      AS units,
-        CASE WHEN CAST(e.year_min AS INTEGER)=CAST(e.year_max AS INTEGER)
-             THEN CAST(CAST(e.year_min AS INTEGER) AS TEXT)
-             ELSE CAST(CAST(e.year_min AS INTEGER) AS TEXT)||'–'||CAST(CAST(e.year_max AS INTEGER) AS TEXT)
-        END               AS year_label,
-        e.parcelnum
-    FROM esite_parcel_groups e
-    LEFT JOIN town_lookup t ON UPPER(e.town_name)=UPPER(t.townname_title)
-    WHERE e.site_count >= 20
-      AND LOWER(COALESCE(e.parcel_category,'')) NOT IN ('ca','s1','s2')
-    ORDER BY e.site_count DESC
-    LIMIT 12
-''').fetchall()
-
-# ── 5. RPC table ──────────────────────────────────────────────────────────────
-rpc_rows = con.execute('''
-    SELECT
-        t.rpc_name,
-        SUM(d.unit_count)                    AS total_units,
-        ROUND(AVG(d.unit_count),2)           AS avg_per_project
-    FROM dhcd_new_housing d
-    LEFT JOIN town_lookup t ON UPPER(d.town_name_title)=UPPER(t.townname_title)
-    WHERE d.year_built BETWEEN 2016 AND 2025
-      AND LOWER(COALESCE(d.site_type,'')) NOT IN (
-          'camp','seasonal home','seasonal camp','camp/seasonal home','seasonal')
-      AND t.rpc_name IS NOT NULL
-    GROUP BY t.rpc_name
-    ORDER BY total_units DESC
-''').fetchall()
-
-# ── 6. Municipality classification table ──────────────────────────────────
+# ── 4. Municipality classification table ──────────────────────────────────
 muni_rows = con.execute('''
     SELECT
         townname_title                          AS town,
@@ -280,6 +218,21 @@ exempt_year_rows = con.execute(f'''
 exempt_year_inside  = [int(r['inside_units']  or 0) for r in exempt_year_rows]
 exempt_year_outside = [int(r['outside_units'] or 0) for r in exempt_year_rows]
 
+# ── Projected target chart data (VAPDA 60/40 inside/outside split) ────────
+target_mid           = (STATE_TARGET_LOWER + STATE_TARGET_UPPER) / 2
+proj_annual_inside   = round(target_mid * VAPDA_INSIDE_PCT)
+proj_annual_outside  = round(target_mid * (1 - VAPDA_INSIDE_PCT))
+avg_vs_lower_pct     = round(avg_annual / STATE_TARGET_LOWER * 100)
+avg_vs_upper_pct     = round(avg_annual / STATE_TARGET_UPPER * 100)
+target_multiple      = round(STATE_TARGET_LOWER / avg_annual, 1)
+
+PROJ_YEARS           = list(range(2026, 2031))
+chart_all_labels     = [str(y) for y in years] + [str(y) for y in PROJ_YEARS]
+chart_hist_inside    = exempt_year_inside  + [None] * len(PROJ_YEARS)
+chart_hist_outside   = exempt_year_outside + [None] * len(PROJ_YEARS)
+chart_proj_inside    = [None] * len(years) + [proj_annual_inside]  * len(PROJ_YEARS)
+chart_proj_outside   = [None] * len(years) + [proj_annual_outside] * len(PROJ_YEARS)
+
 # ── Total seasonal permits excluded (for disclaimer) ──────────────────────
 seasonal_excluded = int(con.execute('''
     SELECT SUM(unit_count) FROM dhcd_new_housing
@@ -295,57 +248,6 @@ def tier_badge(tier):
     t = (tier or 'unknown').lower()
     cls = t if t in ('urban','suburban','rural') else 'unknown'
     return f'<span class="badge badge-{cls}">{t.title()}</span>'
-
-# Merge DHCD + ESITE into one list, sort by units desc
-combined_list = []
-for p in dhcd_top:
-    combined_list.append({
-        'source': 'DHCD',
-        'address_parcel': p['address'] or '—',
-        'town': p['town'] or '—',
-        'tier': p['tier'],
-        'units': int(p['units']),
-        'year_label': str(p['year_label']),
-        'category': (p['category'] or '—').title(),
-        'is_esite': False,
-    })
-for e in esite_top:
-    combined_list.append({
-        'source': 'ESITE',
-        'address_parcel': e['parcelnum'],
-        'town': (e['town_raw'] or '—').title(),
-        'tier': e['tier'],
-        'units': int(e['units']),
-        'year_label': e['year_label'],
-        'category': e['category'] or '—',
-        'is_esite': True,
-    })
-combined_list.sort(key=lambda r: r['units'], reverse=True)
-
-combined_rows_html = ''
-for row in combined_list:
-    src_tag = (f'<span class="source-tag source-esite">ESITE</span>'
-               if row['is_esite'] else
-               f'<span class="source-tag source-dhcd">DHCD</span>')
-    addr_cls = 'mono small' if row['is_esite'] else ''
-    combined_rows_html += f'''<tr>
-      <td>{src_tag}</td>
-      <td class="{addr_cls}">{row["address_parcel"]}</td>
-      <td>{row["town"]}</td>
-      <td>{tier_badge(row["tier"])}</td>
-      <td class="num">{row["units"]:,}</td>
-      <td class="num">{row["year_label"]}</td>
-      <td>{row["category"]}</td>
-    </tr>'''
-
-# RPC rows
-rpc_rows_html = ''
-for r in rpc_rows:
-    rpc_rows_html += f'''<tr>
-      <td>{r["rpc_name"] or "—"}</td>
-      <td class="num">{int(r["total_units"] or 0):,}</td>
-      <td class="num">{r["avg_per_project"]}</td>
-    </tr>'''
 
 # ── Municipality table rows ───────────────────────────────────────────────────
 muni_rows_html = ''
@@ -486,6 +388,7 @@ html = f"""<!DOCTYPE html>
   .chart-container {{
     position: relative;
   }}
+  .chart-container.h300 {{ height: 300px; }}
   .chart-container.h240 {{ height: 240px; }}
   .chart-container.h160 {{ height: 160px; }}
   .chart-container.h200 {{ height: 200px; }}
@@ -522,7 +425,6 @@ html = f"""<!DOCTYPE html>
     letter-spacing: 0.03em;
   }}
   .source-dhcd  {{ background:#e5f2ee; color:#074B41; }}
-  .source-esite {{ background:#e8eef8; color:#1a4080; }}
 
   /* Note / caveat boxes */
   .note {{
@@ -706,26 +608,23 @@ html = f"""<!DOCTYPE html>
 
 <!-- ── 1. The production gap ──────────────────────────────────────────────── -->
 <section>
-  <h2>Vermont is building about one-fifth of what it needs.</h2>
+  <h2>Vermont is building far less than it needs.</h2>
   <div class="intro">
-    <p>Vermont's official housing target is <strong>{STATE_TARGET:,} units per year</strong> — the number the state needs to build annually to address its housing shortage. Since 2016, the state has averaged just {avg_annual:,} units per year, roughly 22% of that goal.</p>
-  </div>
-
-  <div class="callouts">
-    <div class="callout"><div class="num">{avg_annual:,}</div><div class="lbl">Avg. units/year built (2016–2025)</div></div>
-    <div class="callout"><div class="num">{STATE_TARGET:,}</div><div class="lbl">State's annual target</div></div>
-    <div class="callout"><div class="num">{STATE_TARGET-avg_annual:,}</div><div class="lbl">Annual shortfall</div></div>
+    <p>Vermont's Act 47 (2023) sets an annual housing production target of <strong>{STATE_TARGET_LOWER:,}–{STATE_TARGET_UPPER:,} units per year</strong>. The lower bound is the minimum needed to keep pace with demand; the upper bound would make meaningful progress on the existing shortage. Since 2016, Vermont has averaged {avg_annual:,} units/year — about {avg_vs_lower_pct}% of the minimum target.</p>
+    <p>There's also a geographic mismatch. Vermont's Act 181 growth area framework intends future development to concentrate inside designated centers — VAPDA projects 60% of future housing will be built inside those areas. Yet only <strong>{exempt_inside_pct}%</strong> of production since 2016 landed inside growth areas. The chart below shows both gaps at once: the production shortfall and the geographic split.</p>
   </div>
 
   <div class="chart-wrap">
-    <div class="chart-label">Annual Housing Units Completed by Community Type — 2016–2025</div>
-    <div class="chart-container h240">
+    <div class="chart-label">Annual Housing Units — 2016–2025 Actual, 2026–2030 Illustrative Target</div>
+    <div class="chart-container h300">
       <canvas id="annualChart"></canvas>
     </div>
-    <div class="chart-source">Source: DHCD New Housing Database (Vermont Agency of Commerce &amp; Community Development)</div>
+    <div class="chart-source">Source: DHCD New Housing Database (Vermont ACCD) · Target range: Act 47 (2023) · Geographic projection: VAPDA</div>
   </div>
   <div class="note">
-    <strong>State target:</strong> Vermont's annual goal of {STATE_TARGET:,} units/year is not shown on the chart because it is nearly four times the highest year recorded — including it would make year-to-year differences unreadable. Community types (rural, suburban, urban) are based on 2020 Census population and density; see the methodology section for thresholds and definitions. These counts do <em>not</em> imply primary residence — many permitted units may be second homes or part-time residences.
+    <strong>Shaded band:</strong> Vermont's annual target range of {STATE_TARGET_LOWER:,}–{STATE_TARGET_UPPER:,} units/year.
+    <strong>Lighter bars (2026–2030):</strong> Illustrative target-level production using the VAPDA-projected 60/40 inside/outside split — {proj_annual_inside:,} units inside and {proj_annual_outside:,} outside growth areas per year.
+    Reaching the lower bound would require roughly {target_multiple}× current production.
   </div>
 </section>
 
@@ -779,61 +678,7 @@ html = f"""<!DOCTYPE html>
   </div>
 </section>
 
-<!-- ── 5. Large-scale development ────────────────────────────────────────── -->
-<section>
-  <h2>Large-scale development is concentrated in Tier 1 communities.</h2>
-  <div class="intro">
-    <p>The table below combines the largest projects from two sources: DHCD (which captures large multi-family buildings as single permit records) and ESITE (Vermont's statewide parcel database, which reveals single-family subdivisions that appear in DHCD as many individual 1-unit permits). Together they show that large-scale residential development — whether apartment buildings or developer subdivisions — is overwhelmingly concentrated in urban and suburban Chittenden County.</p>
-  </div>
-
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Source</th>
-          <th>Address / Parcel</th>
-          <th>Town</th>
-          <th>Community Type</th>
-          <th class="num">Units</th>
-          <th class="num">Year(s)</th>
-          <th>Category</th>
-        </tr>
-      </thead>
-      <tbody>
-        {combined_rows_html}
-      </tbody>
-    </table>
-    <div class="chart-source">Sources: DHCD New Housing Database (Vermont ACCD) · VCGI ESITE Development Sites Parcel Layer</div>
-  </div>
-  <div class="caveat">
-    <strong>Two data sources:</strong> <em>DHCD</em> records are individual building permits; large multi-family projects appear as a single entry.
-    <em>ESITE</em> records group all homes sharing a parcel number within a town — a reliable signal for developer subdivisions that would otherwise be invisible in DHCD as dozens of single-unit permits.
-    The two datasets cannot be directly joined; they are shown here as complementary evidence.
-  </div>
-</section>
-
-<!-- ── 6. Regional breakdown ──────────────────────────────────────────────── -->
-<section>
-  <h2>Regional production by planning district</h2>
-  <div class="intro">
-    <p>Chittenden County Regional Planning Commission (CCRPC) leads both in total volume and in average project size — a direct result of its urban character and concentrated demand. Most other regions average close to one unit per permit, reflecting the single-family rural pattern.</p>
-  </div>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Regional Planning Commission</th>
-          <th class="num">Total Units (2016–2025)</th>
-          <th class="num">Avg Units / Project</th>
-        </tr>
-      </thead>
-      <tbody>{rpc_rows_html}</tbody>
-    </table>
-    <div class="chart-source">Source: DHCD New Housing Database (Vermont Agency of Commerce &amp; Community Development) · Year-round units only</div>
-  </div>
-</section>
-
-<!-- ── 7. Inside/outside growth areas ─────────────────────────────────────── -->
+<!-- ── 5. Inside/outside growth areas ─────────────────────────────────────── -->
 <section>
   <h2>About {exempt_outside_pct}% of new housing was built outside Vermont's designated growth areas.</h2>
   <div class="intro">
@@ -890,13 +735,10 @@ html = f"""<!DOCTYPE html>
   <h2>Data &amp; Methodology</h2>
 
   <h3>DHCD New Housing Database</h3>
-  <p class="intro">The Vermont Department of Housing &amp; Community Development (DHCD), in partnership with the Vermont Center for Geographic Information (VCGI), tracks new residential housing completions statewide, derived primarily from E911 site records. Data is published as the <em>VT New Housing Units view</em> ArcGIS feature service (<code>VT_New_Housing_Units_view</code>, hosted by VCGI on ArcGIS Online) and is accessible via the DHCD Housing Development Dashboard at HousingData.org. Coverage begins in 2016. Each record is a single E911 site address with a unit count, coordinates, and a <code>YEARBUILT</code> field. Large single-family subdivisions often appear as many individual 1-unit records rather than one aggregated project; ESITE parcel analysis (below) is used to identify these.</p>
-
-  <h3>VCGI ESITE / E911 Site Locations Layer</h3>
-  <p class="intro">Vermont Center for Geographic Information (VCGI) maintains the E911 Site Locations (ESITE) database — the same underlying source as the DHCD housing records above. For the large-project table, we used this layer independently to identify developer subdivisions by grouping all residential sites sharing the same parcel number within a town. ESITE records aggregated this way cannot be reliably joined to individual DHCD permit records by address or ID, so the two are shown as complementary rather than merged evidence.</p>
+  <p class="intro">The Vermont Department of Housing &amp; Community Development (DHCD), in partnership with the Vermont Center for Geographic Information (VCGI), tracks new residential housing completions statewide, derived primarily from E911 site records. Data is published as the <em>VT New Housing Units view</em> ArcGIS feature service (<code>VT_New_Housing_Units_view</code>, hosted by VCGI on ArcGIS Online) and is accessible via the DHCD Housing Development Dashboard at HousingData.org. Coverage begins in 2016. Each record is a single E911 site address with a unit count, coordinates, and a <code>YEARBUILT</code> field.</p>
 
   <h3>Seasonal and camp structures</h3>
-  <p class="intro">Permits classified as seasonal or camp structures are <strong>excluded entirely from all data and charts in this analysis.</strong> This affects {seasonal_excluded:,} permits in the 2016–2025 study period. These structures do not contribute to Vermont's year-round housing supply. Identifying these permits by their DHCD <code>site_type</code> field: the three values filtered out are <em>CAMP</em>, <em>SEASONAL HOME</em>, and <em>SEASONAL CAMP</em>. In the ESITE parcel layer, parcels with category codes <em>CA</em> (camp), <em>S1</em>, and <em>S2</em> (seasonal) are likewise excluded.</p>
+  <p class="intro">Permits classified as seasonal or camp structures are <strong>excluded entirely from all data and charts in this analysis.</strong> This affects {seasonal_excluded:,} permits in the 2016–2025 study period. These structures do not contribute to Vermont's year-round housing supply. Identifying these permits by their DHCD <code>site_type</code> field: the three values filtered out are <em>CAMP</em>, <em>SEASONAL HOME</em>, and <em>SEASONAL CAMP</em>.</p>
 
   <h3>How community types are assigned</h3>
   <p class="intro">Every permitted structure is classified by the community type of the municipality in which it was permitted, using 2020 Census population and population density (residents per km², computed using Vermont State Plane EPSG:32145 projection). The three tiers and their thresholds are:</p>
@@ -972,45 +814,10 @@ html = f"""<!DOCTYPE html>
     </div>
   </details>
 
-  <details>
-    <summary>ESITE parcel_category mapping table</summary>
-    <div class="details-body">
-      <p>ESITE is used only in the large-project table, where parcel groups with 20 or more sites are shown. The <code>parcel_category</code> field is mapped to a display label for that table. Seasonal and camp categories are excluded from the table entirely.</p>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>parcel_category code</th>
-              <th>Description</th>
-              <th>Display label in large-project table</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr class="excluded-row"><td>CA</td><td>Camp</td><td>Excluded — Seasonal/Camp</td></tr>
-            <tr class="excluded-row"><td>S1</td><td>Seasonal (type 1)</td><td>Excluded — Seasonal/Camp</td></tr>
-            <tr class="excluded-row"><td>S2</td><td>Seasonal (type 2)</td><td>Excluded — Seasonal/Camp</td></tr>
-            <tr><td>R1</td><td>Residential, 1 unit</td><td>Single-family</td></tr>
-            <tr><td>R2</td><td>Residential, 2 units</td><td>Single-family</td></tr>
-            <tr><td>M</td><td>Multi-unit / Condo complex</td><td>Multi-unit</td></tr>
-            <tr><td>C</td><td>Condominium</td><td>Condo</td></tr>
-            <tr><td>F</td><td>Farm with residence</td><td>Residential / Farm</td></tr>
-            <tr><td>MHU / MHL</td><td>Mobile home (upper / lower)</td><td>Residential</td></tr>
-            <tr><td>W</td><td>Woodland / waterfront</td><td>Residential</td></tr>
-            <tr><td>O</td><td>Other</td><td>Residential</td></tr>
-            <tr><td>I</td><td>Institutional</td><td>Residential</td></tr>
-            <tr><td>UO / UE</td><td>Urban open / urban exempt</td><td>Residential</td></tr>
-            <tr><td>(null / blank)</td><td>Unclassified</td><td>Residential</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </details>
-
   <ul class="sources">
     <li><a href="https://housingdata.org/profile/home-building/dhcd-dashboard" target="_blank">DHCD Housing Development Dashboard — HousingData.org (Vermont Housing Finance Agency / VCGI)</a></li>
     <li><a href="https://www.arcgis.com/home/item.html?id=c3d713d4bdca45499e1b322c6be6f666" target="_blank">VT New Housing Units view — ArcGIS Online (VCGI) — underlying feature service for DHCD data</a></li>
     <li><a href="https://geodata.vermont.gov/datasets/VCGI::vt-data-2020-census-county-subdivision/about" target="_blank">VT Data – 2020 Census County Subdivision — Vermont Open Geodata Portal (VCGI)</a></li>
-    <li><a href="https://geodata.vermont.gov/datasets/VCGI::vt-data-e911-site-locations-address-points-1/about" target="_blank">VT Data – E911 Site Locations (ESITE) — Vermont Open Geodata Portal (VCGI)</a></li>
     <li><a href="https://legislature.vermont.gov/bill/status/2024/S.100" target="_blank">Act 47 (2023) — Vermont HOME Act / Housing Production Goal (8,237 units/year)</a></li>
     <li><a href="https://legislature.vermont.gov/bill/status/2024/H.687" target="_blank">Act 181 (2024) — Act 250 Modernization / Development Tier System</a></li>
     <li><a href="https://geodata.vermont.gov/" target="_blank">Vermont Open Geodata Portal — Act 181 Temporary Exemption Area Maps (ACCD)</a></li>
@@ -1044,13 +851,19 @@ html = f"""<!DOCTYPE html>
 
 <script>
 // Data embedded from housing_dev.db at generation time
-const YEARS           = {json.dumps(annual_labels)};
-const ANNUAL_RURAL    = {json.dumps(annual_rural)};
-const ANNUAL_SUBURBAN = {json.dumps(annual_suburban)};
-const ANNUAL_URBAN    = {json.dumps(annual_urban)};
-const SCALE_PCT       = {json.dumps(scale_pct)};
-const TYPE_LABELS     = {json.dumps(type_labels)};
-const TYPE_UNITS      = {json.dumps(type_units)};
+const YEARS               = {json.dumps(annual_labels)};   // 2016–2025, used by exemptYearChart
+const SCALE_PCT           = {json.dumps(scale_pct)};
+const TYPE_LABELS         = {json.dumps(type_labels)};
+const TYPE_UNITS          = {json.dumps(type_units)};
+
+// Section 1 chart: historical + projected target bars
+const CHART_ALL_LABELS    = {json.dumps(chart_all_labels)};
+const CHART_HIST_INSIDE   = {json.dumps(chart_hist_inside)};
+const CHART_HIST_OUTSIDE  = {json.dumps(chart_hist_outside)};
+const CHART_PROJ_INSIDE   = {json.dumps(chart_proj_inside)};
+const CHART_PROJ_OUTSIDE  = {json.dumps(chart_proj_outside)};
+const STATE_TARGET_LOWER  = {STATE_TARGET_LOWER};
+const STATE_TARGET_UPPER  = {STATE_TARGET_UPPER};
 
 // Exemption area data
 const EXEMPT_TYPE_LABELS  = {json.dumps(exempt_type_labels)};
@@ -1059,15 +872,52 @@ const EXEMPT_TYPE_OUTSIDE = {json.dumps(exempt_type_outside)};
 const EXEMPT_YEAR_INSIDE  = {json.dumps(exempt_year_inside)};
 const EXEMPT_YEAR_OUTSIDE = {json.dumps(exempt_year_outside)};
 
-// ── Annual stacked bar ─────────────────────────────────────────────────────
+// ── Annual chart: inside/outside growth areas, historical + projected ────────
+const targetBandPlugin = {{
+  id: 'targetBand',
+  beforeDraw(chart) {{
+    const {{ctx, chartArea, scales: {{y}}}} = chart;
+    if (!y || !chartArea) return;
+    const yTop  = y.getPixelForValue(STATE_TARGET_UPPER);
+    const yBot  = y.getPixelForValue(STATE_TARGET_LOWER);
+    const {{left, right}} = chartArea;
+    ctx.save();
+    // Shaded band
+    ctx.fillStyle = 'rgba(242,100,74,0.09)';
+    ctx.fillRect(left, yTop, right - left, yBot - yTop);
+    // Dashed boundary lines
+    ctx.strokeStyle = 'rgba(242,100,74,0.55)';
+    ctx.setLineDash([6, 4]);
+    ctx.lineWidth = 1.5;
+    [yTop, yBot].forEach(px => {{
+      ctx.beginPath(); ctx.moveTo(left, px); ctx.lineTo(right, px); ctx.stroke();
+    }});
+    ctx.setLineDash([]);
+    // Bound labels at right edge
+    ctx.fillStyle = 'rgba(200,75,50,0.85)';
+    ctx.font = '10px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText('{STATE_TARGET_UPPER:,}', right - 4, yTop - 4);
+    ctx.fillText('{STATE_TARGET_LOWER:,}', right - 4, yBot - 4);
+    // "Target range" label
+    const midY = (yTop + yBot) / 2;
+    ctx.fillStyle = 'rgba(200,75,50,0.6)';
+    ctx.textAlign = 'left';
+    ctx.fillText('Target range', left + 4, midY + 4);
+    ctx.restore();
+  }}
+}};
+
 new Chart(document.getElementById('annualChart'), {{
   type: 'bar',
+  plugins: [targetBandPlugin],
   data: {{
-    labels: YEARS,
+    labels: CHART_ALL_LABELS,
     datasets: [
-      {{ label: 'Rural',    data: ANNUAL_RURAL,    backgroundColor: '#074B41', stack: 's' }},
-      {{ label: 'Suburban', data: ANNUAL_SUBURBAN, backgroundColor: '#8ED4DA', stack: 's' }},
-      {{ label: 'Urban',    data: ANNUAL_URBAN,    backgroundColor: '#F89C45', stack: 's' }},
+      {{ label: 'Outside growth areas',         data: CHART_HIST_OUTSIDE, backgroundColor: '#F89C45',               stack: 's' }},
+      {{ label: 'Inside growth areas',          data: CHART_HIST_INSIDE,  backgroundColor: '#074B41',               stack: 's' }},
+      {{ label: 'Outside growth areas (proj.)', data: CHART_PROJ_OUTSIDE, backgroundColor: 'rgba(248,156,69,0.38)', stack: 's', borderColor: '#F89C45', borderWidth: 1 }},
+      {{ label: 'Inside growth areas (proj.)',  data: CHART_PROJ_INSIDE,  backgroundColor: 'rgba(7,75,65,0.38)',    stack: 's', borderColor: '#074B41', borderWidth: 1 }},
     ],
   }},
   options: {{
@@ -1075,18 +925,31 @@ new Chart(document.getElementById('annualChart'), {{
     maintainAspectRatio: false,
     interaction: {{ mode: 'index', intersect: false }},
     plugins: {{
-      legend: {{ position: 'bottom', labels: {{ font: {{ size: 12 }}, padding: 16 }} }},
+      legend: {{
+        position: 'bottom',
+        labels: {{
+          font: {{ size: 12 }}, padding: 16,
+          filter: item => !item.text.includes('(proj.)'),
+        }},
+      }},
       tooltip: {{
+        filter: item => item.raw !== null,
         callbacks: {{
-          footer: items => 'Total: ' + items.reduce((s,i)=>s+i.raw,0).toLocaleString() + ' units'
-        }}
-      }}
+          footer: items => {{
+            const active = items.filter(i => i.raw !== null);
+            const tot = active.reduce((s, i) => s + i.raw, 0);
+            const isProjYear = active.some(i => i.datasetIndex >= 2);
+            return tot ? (isProjYear ? 'Projected total: ' : 'Total: ') + tot.toLocaleString() + ' units' : '';
+          }},
+        }},
+      }},
     }},
     scales: {{
       x: {{ stacked: true, grid: {{ display: false }} }},
       y: {{
         stacked: true,
         beginAtZero: true,
+        suggestedMax: {STATE_TARGET_UPPER + 900},
         ticks: {{ callback: v => v.toLocaleString() }},
       }},
     }},
