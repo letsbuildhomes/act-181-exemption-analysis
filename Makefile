@@ -14,7 +14,7 @@
 # To serve the site locally:
 #   cd output && python3 -m http.server
 
-.PHONY: all build enrich patch map_data clean rebuild
+.PHONY: all build report enrich patch map_data clean rebuild
 
 STAMPS = .stamps
 OUTPUT = output
@@ -23,7 +23,7 @@ RAW_DATA = data/act250_permits.csv data/dhcd_housing.csv \
            data/rpc_housing_targets.csv data/stormwater_permits.csv \
            data/vt_towns.geojson data/vt_counties.geojson
 
-all: enrich patch map_data build
+all: enrich patch map_data build report
 
 build: $(OUTPUT)/index.html
 
@@ -75,6 +75,13 @@ $(STAMPS)/map_data: build_map_data.py housing_dev.db \
 
 $(OUTPUT)/index.html: generate_site.py housing_dev.db | $(OUTPUT)
 	uv run python3 generate_site.py
+
+# ── Step 7: Generate blog reference document ──────────────────────────────────
+
+report: $(OUTPUT)/report.md
+
+$(OUTPUT)/report.md: generate_report.py housing_dev.db | $(OUTPUT)
+	/opt/homebrew/bin/uv run python3 generate_report.py
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
 
