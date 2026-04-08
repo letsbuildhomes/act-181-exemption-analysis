@@ -18,6 +18,7 @@ import json, re, sqlite3
 import pandas as pd
 import geopandas as gpd
 from shapely.geometry import Point
+from config import START_YEAR, END_YEAR
 
 RAW = 'data'
 DB  = 'housing_dev.db'
@@ -103,6 +104,7 @@ print(f"  → {len(rpc)} RPC regions")
 print("Loading DHCD new housing data…")
 dhcd = pd.read_csv(f'{RAW}/dhcd_housing.csv', dtype=str, low_memory=False)
 dhcd.columns = [c.lower() for c in dhcd.columns]
+dhcd = dhcd[dhcd['pre2016'] != 'Likely']
 dhcd = dhcd.rename(columns={
     'esiteid':        'esite_id',
     'townname':       'town_name',
@@ -111,11 +113,15 @@ dhcd = dhcd.rename(columns={
     'unitcount':      'unit_count',
     'yearbuilt':      'year_built',
     'affordable':     'affordable',
-    'gpsx':           'longitude',
-    'gpsy':           'latitude',
     'primaryaddress': 'address',
     'sourceofdata':   'data_source',
 })
+dhcd = dhcd[[
+    'esite_id', 'town_name', 'county', 'rpc',
+    'site_type', 'site_type_general', 'unit_count', 'year_built',
+    'affordable', 'longitude', 'latitude', 'address',
+    'zip', 'data_source', 'change',
+]]
 for c in ['unit_count', 'year_built']:
     dhcd[c] = pd.to_numeric(dhcd[c], errors='coerce')
 for c in ['latitude', 'longitude']:
@@ -216,15 +222,15 @@ for tbl in tables['name']:
     count = pd.read_sql(f"SELECT COUNT(*) as n FROM [{tbl}]", con)['n'][0]
     print(f"  {tbl:<30} {count:>8,} rows")
 
-print("\n── DHCD: units by year (2021–2025) ────────────────────────────────")
-yr = pd.read_sql_query("""
+print(f"\n── DHCD: units by year ({START_YEAR}–{END_YEAR}) ────────────────────────────────")
+yr = pd.read_sql_query(f"""
     SELECT year_built,
            COUNT(*) AS sites,
            SUM(unit_count) AS units,
            SUM(CASE WHEN site_type_general LIKE '%SINGLE%' THEN unit_count ELSE 0 END) AS sf_units,
            SUM(CASE WHEN site_type_general LIKE '%MULTI%'  THEN unit_count ELSE 0 END) AS mf_units
     FROM dhcd_new_housing
-    WHERE year_built BETWEEN 2021 AND 2025
+    WHERE year_built BETWEEN {START_YEAR} AND {END_YEAR}
     GROUP BY year_built ORDER BY year_built
 """, con)
 print(yr.to_string(index=False))

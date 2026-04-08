@@ -27,6 +27,7 @@ import pandas as pd
 import geopandas as gpd
 from shapely.ops import unary_union
 from shapely.geometry import Point
+from config import START_YEAR, END_YEAR
 
 HERE    = os.path.dirname(os.path.abspath(__file__))
 DB_SRC  = os.path.join(HERE, 'housing_dev.db')
@@ -163,15 +164,15 @@ by_type = pd.read_sql_query("""
 """, con)
 print(by_type.to_string(index=False))
 
-print("\n── Inside vs outside by year (2016–2025) ────────────────────────────")
-by_year = pd.read_sql_query("""
+print(f"\n── Inside vs outside by year ({START_YEAR}–{END_YEAR}) ────────────────────────────")
+by_year = pd.read_sql_query(f"""
     SELECT
         CAST(year_built AS INTEGER) AS year,
         SUM(CASE WHEN in_exemption_area = 1 THEN unit_count ELSE 0 END) AS inside_units,
         SUM(CASE WHEN in_exemption_area = 0 THEN unit_count ELSE 0 END) AS outside_units,
         COUNT(*) AS total_projects
     FROM dhcd_new_housing
-    WHERE year_built BETWEEN 2016 AND 2025
+    WHERE year_built BETWEEN {START_YEAR} AND {END_YEAR}
       AND in_exemption_area IS NOT NULL
     GROUP BY year_built
     ORDER BY year_built

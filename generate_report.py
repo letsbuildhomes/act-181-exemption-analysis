@@ -13,6 +13,7 @@ Usage:
 import os
 import sys
 import sqlite3
+from config import START_YEAR, END_YEAR, PROJ_START_YEAR, PROJ_END_YEAR
 
 HERE   = os.path.dirname(os.path.abspath(__file__))
 DB     = os.path.join(HERE, 'housing_dev.db')
@@ -42,29 +43,29 @@ con.row_factory = sqlite3.Row
 
 
 # ── Query 0: Seasonal units excluded ──────────────────────────────────────────
-seasonal_excluded = int(con.execute('''
+seasonal_excluded = int(con.execute(f'''
     SELECT SUM(unit_count) FROM dhcd_new_housing
-    WHERE year_built BETWEEN 2016 AND 2025
+    WHERE year_built BETWEEN {START_YEAR} AND {END_YEAR}
       AND LOWER(COALESCE(site_type,'')) IN (
           'camp','seasonal home','seasonal camp','camp/seasonal home','seasonal')
 ''').fetchone()[0] or 0)
 
 
 # ── Query 1: site_type_general vocabulary ─────────────────────────────────────
-typology_vocab_rows = con.execute('''
+typology_vocab_rows = con.execute(f'''
     SELECT
         COALESCE(site_type_general, '(null)') AS raw_value,
         COUNT(*)          AS project_count,
         SUM(unit_count)   AS unit_count
     FROM dhcd_new_housing
-    WHERE year_built BETWEEN 2016 AND 2025
+    WHERE year_built BETWEEN {START_YEAR} AND {END_YEAR}
     GROUP BY site_type_general
     ORDER BY unit_count DESC
 ''').fetchall()
 
 
 # ── Query 2: Town counts by tier ──────────────────────────────────────────────
-tier_count_rows = con.execute('''
+tier_count_rows = con.execute(f'''
     SELECT
         COALESCE(urban_rural_tier, 'Rural') AS tier,
         COUNT(*) AS town_count
@@ -80,7 +81,7 @@ tier_count_rows = con.execute('''
 
 
 # ── Query 3: Total units by tier ──────────────────────────────────────────────
-TOTAL_BY_TIER_SQL = """\
+TOTAL_BY_TIER_SQL = f"""\
 SELECT
     tier,
     units,
@@ -91,13 +92,13 @@ FROM (
         SUM(d.unit_count) AS units
     FROM dhcd_new_housing d
     LEFT JOIN town_lookup t ON UPPER(d.town_name_title) = UPPER(t.townname_title)
-    WHERE d.year_built BETWEEN 2016 AND 2025
-{seasonal_filter}
+    WHERE d.year_built BETWEEN {START_YEAR} AND {END_YEAR}
+{{seasonal_filter}}
     GROUP BY tier
 )
 ORDER BY units DESC;"""
 
-total_tier_rows = con.execute('''
+total_tier_rows = con.execute(f'''
     SELECT
         tier,
         units,
@@ -108,7 +109,7 @@ total_tier_rows = con.execute('''
             SUM(d.unit_count) AS units
         FROM dhcd_new_housing d
         LEFT JOIN town_lookup t ON UPPER(d.town_name_title) = UPPER(t.townname_title)
-        WHERE d.year_built BETWEEN 2016 AND 2025
+        WHERE d.year_built BETWEEN {START_YEAR} AND {END_YEAR}
           AND LOWER(COALESCE(d.site_type,'')) NOT IN (
               'camp','seasonal home','seasonal camp','camp/seasonal home','seasonal')
         GROUP BY tier
@@ -120,33 +121,33 @@ total_units = sum(int(r['units']) for r in total_tier_rows)
 
 
 # ── Query 4: Annual units by tier ─────────────────────────────────────────────
-ANNUAL_BY_TIER_SQL = """\
+ANNUAL_BY_TIER_SQL = f"""\
 SELECT
     CAST(d.year_built AS INTEGER) AS yr,
     LOWER(COALESCE(t.urban_rural_tier, 'rural')) AS tier,
     SUM(d.unit_count) AS units
 FROM dhcd_new_housing d
 LEFT JOIN town_lookup t ON UPPER(d.town_name_title) = UPPER(t.townname_title)
-WHERE d.year_built BETWEEN 2016 AND 2025
-{seasonal_filter}
+WHERE d.year_built BETWEEN {START_YEAR} AND {END_YEAR}
+{{seasonal_filter}}
 GROUP BY yr, tier
 ORDER BY yr, tier;"""
 
-annual_tier_rows = con.execute('''
+annual_tier_rows = con.execute(f'''
     SELECT
         CAST(d.year_built AS INTEGER) AS yr,
         LOWER(COALESCE(t.urban_rural_tier, 'rural')) AS tier,
         SUM(d.unit_count) AS units
     FROM dhcd_new_housing d
     LEFT JOIN town_lookup t ON UPPER(d.town_name_title) = UPPER(t.townname_title)
-    WHERE d.year_built BETWEEN 2016 AND 2025
+    WHERE d.year_built BETWEEN {START_YEAR} AND {END_YEAR}
       AND LOWER(COALESCE(d.site_type,'')) NOT IN (
           'camp','seasonal home','seasonal camp','camp/seasonal home','seasonal')
     GROUP BY yr, tier
     ORDER BY yr, tier
 ''').fetchall()
 
-years       = list(range(2016, 2026))
+years       = list(range(START_YEAR, END_YEAR + 1))
 tiers_lower = ['rural', 'suburban', 'urban']
 annual      = {t: {y: 0 for y in years} for t in tiers_lower}
 for r in annual_tier_rows:
@@ -157,7 +158,7 @@ avg_annual    = round(sum(annual_totals) / len(years))
 
 
 # ── Query 5: Typology by tier ─────────────────────────────────────────────────
-TYPOLOGY_BY_TIER_SQL = """\
+TYPOLOGY_BY_TIER_SQL = f"""\
 SELECT
     LOWER(COALESCE(t.urban_rural_tier, 'rural')) AS tier,
     COALESCE(d.site_type_general, 'OTHER RESIDENTIAL') AS typology,
@@ -171,12 +172,12 @@ SELECT
     ) AS pct_of_tier
 FROM dhcd_new_housing d
 LEFT JOIN town_lookup t ON UPPER(d.town_name_title) = UPPER(t.townname_title)
-WHERE d.year_built BETWEEN 2016 AND 2025
-{seasonal_filter}
+WHERE d.year_built BETWEEN {START_YEAR} AND {END_YEAR}
+{{seasonal_filter}}
 GROUP BY tier, typology
 ORDER BY tier, units DESC;"""
 
-typology_tier_rows = con.execute('''
+typology_tier_rows = con.execute(f'''
     SELECT
         LOWER(COALESCE(t.urban_rural_tier, 'rural')) AS tier,
         COALESCE(d.site_type_general, 'OTHER RESIDENTIAL') AS typology,
@@ -190,7 +191,7 @@ typology_tier_rows = con.execute('''
         ) AS pct_of_tier
     FROM dhcd_new_housing d
     LEFT JOIN town_lookup t ON UPPER(d.town_name_title) = UPPER(t.townname_title)
-    WHERE d.year_built BETWEEN 2016 AND 2025
+    WHERE d.year_built BETWEEN {START_YEAR} AND {END_YEAR}
       AND LOWER(COALESCE(d.site_type,'')) NOT IN (
           'camp','seasonal home','seasonal camp','camp/seasonal home','seasonal')
     GROUP BY tier, typology
@@ -199,7 +200,7 @@ typology_tier_rows = con.execute('''
 
 
 # ── Query 6: Project scale by tier ────────────────────────────────────────────
-SCALE_BY_TIER_SQL = """\
+SCALE_BY_TIER_SQL = f"""\
 SELECT
     LOWER(COALESCE(t.urban_rural_tier, 'rural')) AS tier,
     CASE
@@ -218,8 +219,8 @@ SELECT
     ) AS pct_of_tier
 FROM dhcd_new_housing d
 LEFT JOIN town_lookup t ON UPPER(d.town_name_title) = UPPER(t.townname_title)
-WHERE d.year_built BETWEEN 2016 AND 2025
-{seasonal_filter}
+WHERE d.year_built BETWEEN {START_YEAR} AND {END_YEAR}
+{{seasonal_filter}}
 GROUP BY tier, scale_bucket
 ORDER BY tier,
     CASE scale_bucket
@@ -229,7 +230,7 @@ ORDER BY tier,
         ELSE 4
     END;"""
 
-scale_rows = con.execute('''
+scale_rows = con.execute(f'''
     SELECT
         LOWER(COALESCE(t.urban_rural_tier, 'rural')) AS tier,
         CASE
@@ -248,7 +249,7 @@ scale_rows = con.execute('''
         ) AS pct_of_tier
     FROM dhcd_new_housing d
     LEFT JOIN town_lookup t ON UPPER(d.town_name_title) = UPPER(t.townname_title)
-    WHERE d.year_built BETWEEN 2016 AND 2025
+    WHERE d.year_built BETWEEN {START_YEAR} AND {END_YEAR}
       AND LOWER(COALESCE(d.site_type,'')) NOT IN (
           'camp','seasonal home','seasonal camp','camp/seasonal home','seasonal')
     GROUP BY tier, scale_bucket
@@ -263,26 +264,26 @@ scale_rows = con.execute('''
 
 
 # ── Query 7: Overall inside/outside split ─────────────────────────────────────
-EXEMPT_SPLIT_SQL = """\
+EXEMPT_SPLIT_SQL = f"""\
 SELECT
     CASE in_exemption_area WHEN 1 THEN 'inside' ELSE 'outside' END AS area,
     SUM(unit_count) AS units,
     ROUND(100.0 * SUM(unit_count) / SUM(SUM(unit_count)) OVER (), 1) AS pct_of_total
 FROM dhcd_new_housing
 WHERE in_exemption_area IS NOT NULL
-  AND year_built BETWEEN 2016 AND 2025
-{seasonal_filter}
+  AND year_built BETWEEN {START_YEAR} AND {END_YEAR}
+{{seasonal_filter}}
 GROUP BY in_exemption_area
 ORDER BY in_exemption_area DESC;"""
 
-exempt_split_rows = con.execute('''
+exempt_split_rows = con.execute(f'''
     SELECT
         CASE in_exemption_area WHEN 1 THEN 'inside' ELSE 'outside' END AS area,
         SUM(unit_count) AS units,
         ROUND(100.0 * SUM(unit_count) / SUM(SUM(unit_count)) OVER (), 1) AS pct_of_total
     FROM dhcd_new_housing
     WHERE in_exemption_area IS NOT NULL
-      AND year_built BETWEEN 2016 AND 2025
+      AND year_built BETWEEN {START_YEAR} AND {END_YEAR}
       AND LOWER(COALESCE(site_type,'')) NOT IN (
           'camp','seasonal home','seasonal camp','camp/seasonal home','seasonal')
     GROUP BY in_exemption_area
@@ -295,19 +296,19 @@ exempt_total      = exempt_inside + exempt_outside
 exempt_inside_pct = round(exempt_inside  / exempt_total * 100, 1) if exempt_total else 0
 exempt_outside_pct= round(exempt_outside / exempt_total * 100, 1) if exempt_total else 0
 
-no_join_count = int(con.execute('''
+no_join_count = int(con.execute(f'''
     SELECT COUNT(*) FROM dhcd_new_housing
     WHERE in_exemption_area IS NULL
-      AND year_built BETWEEN 2016 AND 2025
+      AND year_built BETWEEN {START_YEAR} AND {END_YEAR}
 ''').fetchone()[0] or 0)
-total_records = int(con.execute('''
+total_records = int(con.execute(f'''
     SELECT COUNT(*) FROM dhcd_new_housing
-    WHERE year_built BETWEEN 2016 AND 2025
+    WHERE year_built BETWEEN {START_YEAR} AND {END_YEAR}
 ''').fetchone()[0] or 0)
 
 
 # ── Query 8: Annual inside/outside ────────────────────────────────────────────
-EXEMPT_ANNUAL_SQL = """\
+EXEMPT_ANNUAL_SQL = f"""\
 SELECT
     CAST(year_built AS INTEGER) AS yr,
     SUM(CASE WHEN in_exemption_area = 1 THEN unit_count ELSE 0 END) AS inside_units,
@@ -315,12 +316,12 @@ SELECT
     SUM(unit_count) AS total_units
 FROM dhcd_new_housing
 WHERE in_exemption_area IS NOT NULL
-  AND year_built BETWEEN 2016 AND 2025
-{seasonal_filter}
+  AND year_built BETWEEN {START_YEAR} AND {END_YEAR}
+{{seasonal_filter}}
 GROUP BY yr
 ORDER BY yr;"""
 
-exempt_year_rows = con.execute('''
+exempt_year_rows = con.execute(f'''
     SELECT
         CAST(year_built AS INTEGER) AS yr,
         SUM(CASE WHEN in_exemption_area = 1 THEN unit_count ELSE 0 END) AS inside_units,
@@ -328,7 +329,7 @@ exempt_year_rows = con.execute('''
         SUM(unit_count) AS total_units
     FROM dhcd_new_housing
     WHERE in_exemption_area IS NOT NULL
-      AND year_built BETWEEN 2016 AND 2025
+      AND year_built BETWEEN {START_YEAR} AND {END_YEAR}
       AND LOWER(COALESCE(site_type,'')) NOT IN (
           'camp','seasonal home','seasonal camp','camp/seasonal home','seasonal')
     GROUP BY yr
@@ -337,7 +338,7 @@ exempt_year_rows = con.execute('''
 
 
 # ── Query 9: Typology inside/outside ─────────────────────────────────────────
-EXEMPT_TYPOLOGY_SQL = """\
+EXEMPT_TYPOLOGY_SQL = f"""\
 SELECT
     COALESCE(site_type_general, 'OTHER RESIDENTIAL') AS typology,
     SUM(CASE WHEN in_exemption_area = 1 THEN unit_count ELSE 0 END) AS inside_units,
@@ -350,12 +351,12 @@ SELECT
     ) AS pct_inside
 FROM dhcd_new_housing
 WHERE in_exemption_area IS NOT NULL
-  AND year_built BETWEEN 2016 AND 2025
-{seasonal_filter}
+  AND year_built BETWEEN {START_YEAR} AND {END_YEAR}
+{{seasonal_filter}}
 GROUP BY site_type_general
 ORDER BY total_units DESC;"""
 
-exempt_typology_rows = con.execute('''
+exempt_typology_rows = con.execute(f'''
     SELECT
         COALESCE(site_type_general, 'OTHER RESIDENTIAL') AS typology,
         SUM(CASE WHEN in_exemption_area = 1 THEN unit_count ELSE 0 END) AS inside_units,
@@ -368,7 +369,7 @@ exempt_typology_rows = con.execute('''
         ) AS pct_inside
     FROM dhcd_new_housing
     WHERE in_exemption_area IS NOT NULL
-      AND year_built BETWEEN 2016 AND 2025
+      AND year_built BETWEEN {START_YEAR} AND {END_YEAR}
       AND LOWER(COALESCE(site_type,'')) NOT IN (
           'camp','seasonal home','seasonal camp','camp/seasonal home','seasonal')
     GROUP BY site_type_general
@@ -377,7 +378,7 @@ exempt_typology_rows = con.execute('''
 
 
 # ── Query 10: Community type × exemption area cross-tab ──────────────────────
-TIER_EXEMPT_SQL = """\
+TIER_EXEMPT_SQL = f"""\
 SELECT
     LOWER(COALESCE(t.urban_rural_tier, 'rural')) AS tier,
     CASE d.in_exemption_area WHEN 1 THEN 'inside' ELSE 'outside' END AS area,
@@ -392,12 +393,12 @@ SELECT
 FROM dhcd_new_housing d
 LEFT JOIN town_lookup t ON UPPER(d.town_name_title) = UPPER(t.townname_title)
 WHERE d.in_exemption_area IS NOT NULL
-  AND d.year_built BETWEEN 2016 AND 2025
-{seasonal_filter}
+  AND d.year_built BETWEEN {START_YEAR} AND {END_YEAR}
+{{seasonal_filter}}
 GROUP BY tier, d.in_exemption_area
 ORDER BY tier, d.in_exemption_area DESC;"""
 
-tier_exempt_rows = con.execute('''
+tier_exempt_rows = con.execute(f'''
     SELECT
         LOWER(COALESCE(t.urban_rural_tier, 'rural')) AS tier,
         CASE d.in_exemption_area WHEN 1 THEN 'inside' ELSE 'outside' END AS area,
@@ -412,7 +413,7 @@ tier_exempt_rows = con.execute('''
     FROM dhcd_new_housing d
     LEFT JOIN town_lookup t ON UPPER(d.town_name_title) = UPPER(t.townname_title)
     WHERE d.in_exemption_area IS NOT NULL
-      AND d.year_built BETWEEN 2016 AND 2025
+      AND d.year_built BETWEEN {START_YEAR} AND {END_YEAR}
       AND LOWER(COALESCE(d.site_type,'')) NOT IN (
           'camp','seasonal home','seasonal camp','camp/seasonal home','seasonal')
     GROUP BY tier, d.in_exemption_area
@@ -436,7 +437,7 @@ ORDER BY
     END,
     townname_title;"""
 
-town_class_rows = con.execute('''
+town_class_rows = con.execute(f'''
     SELECT
         townname_title                      AS town,
         COALESCE(urban_rural_tier, 'Rural') AS tier,
@@ -486,7 +487,7 @@ def hr():
 
 
 # ── Title and preamble ─────────────────────────────────────────────────────────
-A('# Vermont Housing Production: Data Reference (2016–2025)')
+A(f'# Vermont Housing Production: Data Reference ({START_YEAR}–{END_YEAR})')
 A('')
 A('> **How to use this document.**')
 A('> Every statistic is paired with the SQL query that produced it.')
@@ -508,12 +509,12 @@ A('### Source dataset')
 A('')
 A('All housing figures use the **DHCD New Housing Database** — the dataset that drives the')
 A('Vermont Housing Dashboard. Records represent new housing units as recorded in the')
-A('state E911 address system from 2016 through 2025.')
+A(f'state E911 address system from {START_YEAR} through {END_YEAR}.')
 A('The database file is `housing_dev.db` (SQLite); the primary table is `dhcd_new_housing`.')
 A('')
 A('### Seasonal exclusion')
 A('')
-A(f'**{n(seasonal_excluded)} units** in the DHCD data (2016–2025) are classified as seasonal')
+A(f'**{n(seasonal_excluded)} units** in the DHCD data ({START_YEAR}–{END_YEAR}) are classified as seasonal')
 A('or camp structures and are excluded from every analysis in this document.')
 A('The filter below is applied in every query — it is shown explicitly in each SQL block:')
 A('')
@@ -535,7 +536,7 @@ A('| `MULTI-FAMILY DWELLING`           | Multi-Family      |')
 A('| `SINGLE FAMILY DWELLING`          | Single-Family     |')
 A('| `OTHER RESIDENTIAL`               | Other Residential |')
 A('')
-A('Full vocabulary with unit counts (2016–2025, **before** the seasonal filter):')
+A(f'Full vocabulary with unit counts ({START_YEAR}–{END_YEAR}, **before** the seasonal filter):')
 A('')
 for r in typology_vocab_rows:
     A(f'- `{r["raw_value"]}`: {n(r["unit_count"])} units across {n(r["project_count"])} projects')
@@ -546,7 +547,7 @@ A("    COALESCE(site_type_general, '(null)') AS raw_value,")
 A("    COUNT(*)        AS project_count,")
 A("    SUM(unit_count) AS unit_count")
 A("FROM dhcd_new_housing")
-A("WHERE year_built BETWEEN 2016 AND 2025")
+A(f"WHERE year_built BETWEEN {START_YEAR} AND {END_YEAR}")
 A("GROUP BY site_type_general")
 A("ORDER BY unit_count DESC;")
 A('```')
@@ -596,9 +597,9 @@ A('    END;')
 A('```')
 
 A('')
-A('### 1.2 Total housing production by community type (2016–2025)')
+A(f'### 1.2 Total housing production by community type ({START_YEAR}–{END_YEAR})')
 A('')
-A(f'Total year-round units produced 2016–2025: **{n(total_units)}**')
+A(f'Total year-round units produced {START_YEAR}–{END_YEAR}: **{n(total_units)}**')
 A(f'Average annual year-round production: **{n(avg_annual)} units/year**')
 A('')
 A('Breakdown by community type (rows are ordered by `units DESC`, matching the query output):')
@@ -697,13 +698,13 @@ A('')
 A('These are spatially unioned in `add_exemption_areas.py`. Each DHCD project point is')
 A('tagged `in_exemption_area = 1` (inside) or `0` (outside) via a point-in-polygon join.')
 A('')
-A(f'**Spatial join coverage (2016–2025):** {n(total_records - no_join_count)} of')
+A(f'**Spatial join coverage ({START_YEAR}–{END_YEAR}):** {n(total_records - no_join_count)} of')
 A(f'{n(total_records)} records have a join result. {n(no_join_count)} records have')
 A('`in_exemption_area IS NULL` (typically missing coordinates) and are excluded from')
 A('all inside/outside analysis.')
 
 A('')
-A('### 2.2 Overall inside/outside split (2016–2025)')
+A(f'### 2.2 Overall inside/outside split ({START_YEAR}–{END_YEAR})')
 A('')
 A(f'Year-round units with a spatial join result: **{n(exempt_total)}**')
 A('')
@@ -734,20 +735,20 @@ A('')
 A(sql_block(EXEMPT_ANNUAL_SQL))
 
 A('')
-A('### 2.4 VAPDA target projections (2026–2030)')
+A(f'### 2.4 VAPDA target projections ({PROJ_START_YEAR}–{PROJ_END_YEAR})')
 A('')
 A('The VAPDA study projects that 60% of future housing should occur inside designated')
 A('growth areas. Applied to the Act 47 (2023) annual targets:')
 A('')
 A(f'- **State target range:** {n(STATE_TARGET_LOWER)}–{n(STATE_TARGET_UPPER)} units/year')
 A(f'- **Inside — lower bound:** {n(proj_lower_inside)} units/year'
-  f' → {n(proj_lower_inside * 5)} over 2026–2030')
+  f' → {n(proj_lower_inside * 5)} over {PROJ_START_YEAR}–{PROJ_END_YEAR}')
 A(f'- **Inside — upper bound:** {n(proj_upper_inside)} units/year'
-  f' → {n(proj_upper_inside * 5)} over 2026–2030')
+  f' → {n(proj_upper_inside * 5)} over {PROJ_START_YEAR}–{PROJ_END_YEAR}')
 A(f'- **Outside — lower bound:** {n(proj_lower_outside)} units/year'
-  f' → {n(proj_lower_outside * 5)} over 2026–2030')
+  f' → {n(proj_lower_outside * 5)} over {PROJ_START_YEAR}–{PROJ_END_YEAR}')
 A(f'- **Outside — upper bound:** {n(proj_upper_outside)} units/year'
-  f' → {n(proj_upper_outside * 5)} over 2026–2030')
+  f' → {n(proj_upper_outside * 5)} over {PROJ_START_YEAR}–{PROJ_END_YEAR}')
 A(f'- **Midpoint inside projection:** {n(proj_annual_inside)} units/year (used in chart)')
 A(f'- **Midpoint outside projection:** {n(proj_annual_outside)} units/year (used in chart)')
 A('')

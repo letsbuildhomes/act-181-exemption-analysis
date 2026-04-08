@@ -17,6 +17,8 @@ OUTPUT = os.path.join(HERE, 'output')
 os.makedirs(OUTPUT, exist_ok=True)
 OUT    = sys.argv[1] if len(sys.argv) > 1 else os.path.join(OUTPUT, 'blog.html')
 
+from config import START_YEAR, END_YEAR, PROJ_START_YEAR, PROJ_END_YEAR
+
 STATE_TARGET_LOWER = 5573    # Act 47 minimum annual housing target
 STATE_TARGET_UPPER = 8237    # Act 47 upper annual housing target
 VAPDA_INSIDE_PCT   = 0.60    # VAPDA: share of future housing inside growth areas
@@ -29,7 +31,7 @@ con = sqlite3.connect(DB)
 con.row_factory = sqlite3.Row
 
 # ── 1. Annual production by tier ──────────────────────────────────────────────
-years = list(range(2016, 2026))
+years = list(range(START_YEAR, END_YEAR + 1))
 annual_rows = con.execute(f'''
     SELECT
         CAST(d.year_built AS INTEGER) AS yr,
@@ -37,7 +39,7 @@ annual_rows = con.execute(f'''
         SUM(d.unit_count) AS units
     FROM dhcd_new_housing d
     LEFT JOIN town_lookup t ON UPPER(d.town_name_title)=UPPER(t.townname_title)
-    WHERE d.year_built BETWEEN 2016 AND 2025 {SF}
+    WHERE d.year_built BETWEEN {START_YEAR} AND {END_YEAR} {SF}
     GROUP BY yr, tier ORDER BY yr, tier
 ''').fetchall()
 
@@ -93,7 +95,7 @@ typology_tier_rows = con.execute(f'''
         SUM(d.unit_count) AS units
     FROM dhcd_new_housing d
     LEFT JOIN town_lookup t ON UPPER(d.town_name_title)=UPPER(t.townname_title)
-    WHERE d.year_built BETWEEN 2016 AND 2025 {SF}
+    WHERE d.year_built BETWEEN {START_YEAR} AND {END_YEAR} {SF}
     GROUP BY tier, typology
 ''').fetchall()
 
@@ -111,7 +113,7 @@ sfh_rural_suburban_pct = round(sfh_rural_suburban / sfh_total * 100, 1) if sfh_t
 exempt_sum = con.execute(f'''
     SELECT in_exemption_area, SUM(unit_count) AS units
     FROM dhcd_new_housing
-    WHERE in_exemption_area IS NOT NULL AND year_built BETWEEN 2016 AND 2025 {SF}
+    WHERE in_exemption_area IS NOT NULL AND year_built BETWEEN {START_YEAR} AND {END_YEAR} {SF}
     GROUP BY in_exemption_area ORDER BY in_exemption_area DESC
 ''').fetchall()
 inside_units  = next((int(r['units'] or 0) for r in exempt_sum if r['in_exemption_area'] == 1), 0)
@@ -128,7 +130,7 @@ yr_rows = con.execute(f'''
         SUM(CASE WHEN in_exemption_area=1 THEN unit_count ELSE 0 END) AS ins,
         SUM(CASE WHEN in_exemption_area=0 THEN unit_count ELSE 0 END) AS out
     FROM dhcd_new_housing
-    WHERE in_exemption_area IS NOT NULL AND year_built BETWEEN 2016 AND 2025 {SF}
+    WHERE in_exemption_area IS NOT NULL AND year_built BETWEEN {START_YEAR} AND {END_YEAR} {SF}
     GROUP BY yr ORDER BY yr
 ''').fetchall()
 yr_inside  = [int(r['ins'] or 0) for r in yr_rows]
@@ -147,7 +149,7 @@ typ_ex_rows = con.execute(f'''
         SUM(CASE WHEN in_exemption_area=1 THEN unit_count ELSE 0 END) AS ins,
         SUM(CASE WHEN in_exemption_area=0 THEN unit_count ELSE 0 END) AS out
     FROM dhcd_new_housing
-    WHERE in_exemption_area IS NOT NULL AND year_built BETWEEN 2016 AND 2025 {SF}
+    WHERE in_exemption_area IS NOT NULL AND year_built BETWEEN {START_YEAR} AND {END_YEAR} {SF}
     GROUP BY typology
 ''').fetchall()
 
@@ -179,7 +181,7 @@ proj_out_hi   = round(STATE_TARGET_UPPER * (1 - VAPDA_INSIDE_PCT))
 fold_lo       = round(proj_in_lo / avg_inside) if avg_inside else 0
 fold_hi       = round(proj_in_hi / avg_inside) if avg_inside else 0
 
-PROJ_YEARS   = list(range(2026, 2031))
+PROJ_YEARS   = list(range(PROJ_START_YEAR, PROJ_END_YEAR + 1))
 all_labels   = [str(y) for y in years] + [str(y) for y in PROJ_YEARS]
 hist_in      = yr_inside  + [None] * len(PROJ_YEARS)
 hist_out     = yr_outside + [None] * len(PROJ_YEARS)
@@ -407,7 +409,7 @@ html = f"""<!DOCTYPE html>
 
 <div class="method-note">
   <h3>A note on methodology</h3>
-  <p>All figures in this analysis use the DHCD New Housing Database, the same data source behind Vermont&#8217;s official <a href="https://housingdata.org/profile/home-building/dhcd-dashboard" target="_blank">housing dashboard</a>. The dashboard was created by the Vermont Center for Geographic Information in partnership with DHCD to track progress toward the statewide and regional housing targets required under the HOME Act (2023) and Act 181 (2024). It draws on E911 data, regional planning commission records, and other sources. The methodology for counting units and determining year built is still evolving, but it represents the best statewide picture we have. We use records from 2016 through 2025, excluding seasonal and camp structures throughout&#8212;we&#8217;re focused on year-round homes.</p>
+  <p>All figures in this analysis use the DHCD New Housing Database, the same data source behind Vermont&#8217;s official <a href="https://housingdata.org/profile/home-building/dhcd-dashboard" target="_blank">housing dashboard</a>. The dashboard was created by the Vermont Center for Geographic Information in partnership with DHCD to track progress toward the statewide and regional housing targets required under the HOME Act (2023) and Act 181 (2024). It draws on E911 data, regional planning commission records, and other sources. The methodology for counting units and determining year built is still evolving, but it represents the best statewide picture we have. We use records from {START_YEAR} through {END_YEAR}, excluding seasonal and camp structures throughout&#8212;we&#8217;re focused on year-round homes.</p>
   <p>We approach the data through two different lenses. The first classifies Vermont&#8217;s 256 municipalities into community types&#8212;urban, suburban, and rural&#8212;based on 2020 Census population and density. This captures how towns function in practice: a rural town is rural whether or not its center has a designated growth area. The second uses the Act 181 temporary exemption maps as a proxy for future Tier 1 boundaries, tagging every housing project as inside or outside those areas. This captures the regulatory geography that Act 181 is creating.</p>
   <p>These two lenses don&#8217;t perfectly overlap, and that&#8217;s the point. A suburban town might have most of its housing built outside the exemption boundary. A rural town&#8217;s village center might fall inside it. By looking at both, we can see not just the legal map, but the community-level reality underneath it.</p>
 </div>
@@ -419,7 +421,7 @@ html = f"""<!DOCTYPE html>
 <p>We classified every municipality into one of three categories: <strong>urban</strong> (population &ge;&nbsp;5,000 and density &ge;&nbsp;100/km&sup2;), <strong>suburban</strong> (population &ge;&nbsp;2,500 or density &ge;&nbsp;40/km&sup2;), and <strong>rural</strong> (everything else). That gives us {urban_town_count} urban towns, {suburban_town_count} suburban towns, and {rural_town_count} rural towns.</p>
 
 <div class="chart-wrap">
-  <div class="chart-label">Annual Housing Production by Community Type, 2016&#8211;2025</div>
+  <div class="chart-label">Annual Housing Production by Community Type, {START_YEAR}&#8211;{END_YEAR}</div>
   <div class="chart-container h320"><canvas id="tierChart"></canvas></div>
   <div class="chart-source">Source: DHCD New Housing Database (Vermont ACCD) &middot; Seasonal and camp structures excluded</div>
 </div>
@@ -429,7 +431,7 @@ html = f"""<!DOCTYPE html>
 <p>None of this is an argument against concentrating future growth in Vermont&#8217;s population centers. That remains good policy. But directing new growth is different from constraining existing growth, and effective housing policy needs to do the former without inadvertently doing the latter. The data here establishes that rural housing production is a significant share of the state&#8217;s total output&#8212;and that constraints on it carry statewide consequences.</p>
 
 <div class="chart-wrap">
-  <div class="chart-label">Housing Typology by Community Type, 2016&#8211;2025 (units)</div>
+  <div class="chart-label">Housing Typology by Community Type, {START_YEAR}&#8211;{END_YEAR} (units)</div>
   <div class="chart-container h320"><canvas id="typologyTierChart"></canvas></div>
   <div class="chart-source">Source: DHCD New Housing Database (Vermont ACCD) &middot; Multi-family split by unit count per project</div>
 </div>
@@ -445,7 +447,7 @@ html = f"""<!DOCTYPE html>
 <p>Act 181 designates growth areas&#8212;what will become Tier 1&#8212;where development review is streamlined and housing production is meant to concentrate. The final Tier 1 boundaries aren&#8217;t drawn yet, so we used the temporary exemption maps (downtown districts, village centers, growth centers, transit corridors) as a proxy. These aren&#8217;t a perfect stand-in for the final maps, but they&#8217;re the best statewide approximation available, and they let us ask: how does the housing Vermont has actually been building line up with the areas where Act 181 expects future growth to concentrate?</p>
 
 <div class="chart-wrap">
-  <div class="chart-label">Annual Production Inside vs. Outside Exemption Areas, 2016&#8211;2025 actual &amp; 2026&#8211;2030 projected</div>
+  <div class="chart-label">Annual Production Inside vs. Outside Exemption Areas, {START_YEAR}&#8211;{END_YEAR} actual &amp; {PROJ_START_YEAR}&#8211;{PROJ_END_YEAR} projected</div>
   <div class="chart-container h320"><canvas id="insideOutsideChart"></canvas></div>
   <div class="chart-source">Source: DHCD New Housing Database &middot; Act 181 temporary exemption area maps (ACCD) &middot; Projections: VAPDA 60/40 split applied to Act 47 target midpoint ({fmt(proj_in_mid)} inside + {fmt(proj_out_mid)} outside/yr)</div>
 </div>
@@ -459,7 +461,7 @@ html = f"""<!DOCTYPE html>
 <p>Under that projection, roughly {fmt(proj_out_lo)} to {fmt(proj_out_hi)} units per year would still need to be built <em>outside</em> of Tier 1. That&#8217;s significantly more than the roughly {fmt(avg_outside)} per year those areas have historically produced. The state&#8217;s own expectations call for housing growth outside of Tier 1&#8212;not contraction.</p>
 
 <div class="chart-wrap">
-  <div class="chart-label">Housing Typology Inside vs. Outside Exemption Areas, 2016&#8211;2025 (units)</div>
+  <div class="chart-label">Housing Typology Inside vs. Outside Exemption Areas, {START_YEAR}&#8211;{END_YEAR} (units)</div>
   <div class="chart-container h320"><canvas id="typologyExemptChart"></canvas></div>
   <div class="chart-source">Source: DHCD New Housing Database &middot; Act 181 temporary exemption area maps (ACCD) &middot; Multi-family split by unit count per project</div>
 </div>
@@ -471,7 +473,7 @@ html = f"""<!DOCTYPE html>
 <p>A more productive approach would be to plan for the long tail of lower-density housing types&#8212;single-family homes, duplexes, accessory dwellings&#8212;to happen <em>inside</em> Tier 1 rather than outside it. Even in designated growth areas where multifamily development should be the primary focus, there is a role for well-integrated single-family and missing-middle housing that contributes to a connected community fabric rather than defaulting to disconnected, car-dependent patterns elsewhere. That requires Tier 1 areas with enough geographic scope to accommodate a range of housing types&#8212;which circles back to the question of whether the current footprint is large enough.</p>
 
 <div class="chart-wrap">
-  <div class="chart-label">All Housing Projects 2016&#8211;2025 &mdash; Inside vs. Outside Act 181 Exemption Areas</div>
+  <div class="chart-label">All Housing Projects {START_YEAR}&#8211;{END_YEAR} &mdash; Inside vs. Outside Act 181 Exemption Areas</div>
   <div id="vt-map"></div>
   <div class="map-legend">
     <span style="font-weight:600;font-family:system-ui,sans-serif;color:var(--text)">Dot color:</span>
@@ -521,7 +523,7 @@ html = f"""<!DOCTYPE html>
 </div><!-- .blog-container -->
 
 <footer>
-  <p>Analysis by <strong style="color:#fff">Let&#8217;s Build Homes</strong> &middot; Data current through 2025</p>
+  <p>Analysis by <strong style="color:#fff">Let&#8217;s Build Homes</strong> &middot; Data current through {END_YEAR}</p>
   <p style="margin-top:0.3rem;opacity:0.6;font-size:0.78rem">DHCD New Housing Database &middot; Act 181 temporary exemption area maps (ACCD) &middot; 2020 U.S. Census</p>
 </footer>
 

@@ -17,6 +17,8 @@ OUTPUT = os.path.join(HERE, 'output')
 os.makedirs(OUTPUT, exist_ok=True)
 OUT    = sys.argv[1] if len(sys.argv) > 1 else os.path.join(OUTPUT, 'index.html')
 
+from config import START_YEAR, END_YEAR, PROJ_START_YEAR, PROJ_END_YEAR
+
 STATE_TARGET_LOWER = 5573    # Act 47 (2023) minimum annual housing target
 STATE_TARGET_UPPER = 8237    # Act 47 (2023) upper annual housing target
 VAPDA_INSIDE_PCT   = 0.60    # VAPDA projection: share of future housing inside growth areas
@@ -25,21 +27,21 @@ con = sqlite3.connect(DB)
 con.row_factory = sqlite3.Row
 
 # ── 1. Annual production by tier (year-round only) ────────────────────────────
-annual_rows = con.execute('''
+annual_rows = con.execute(f'''
     SELECT
         CAST(d.year_built AS INTEGER) AS yr,
         LOWER(COALESCE(t.urban_rural_tier,'rural')) AS tier,
         SUM(d.unit_count) AS units
     FROM dhcd_new_housing d
     LEFT JOIN town_lookup t ON UPPER(d.town_name_title)=UPPER(t.townname_title)
-    WHERE d.year_built BETWEEN 2016 AND 2025
+    WHERE d.year_built BETWEEN {START_YEAR} AND {END_YEAR}
       AND LOWER(COALESCE(d.site_type,'')) NOT IN (
           'camp','seasonal home','seasonal camp','camp/seasonal home','seasonal')
     GROUP BY yr, tier
     ORDER BY yr, tier
 ''').fetchall()
 
-years  = list(range(2016, 2026))
+years  = list(range(START_YEAR, END_YEAR + 1))
 tiers  = ['rural','suburban','urban']
 annual = {t: {y: 0 for y in years} for t in tiers}
 for r in annual_rows:
@@ -62,7 +64,7 @@ rural_pct      = round(rural_total / total_units * 100)
 non_urban_pct  = round((rural_total + sum(annual_suburban)) / total_units * 100)
 
 # ── 2. Project scale by tier (% of units) ────────────────────────────────────
-scale_rows = con.execute('''
+scale_rows = con.execute(f'''
     SELECT
         LOWER(COALESCE(t.urban_rural_tier,'rural')) AS tier,
         CASE
@@ -74,7 +76,7 @@ scale_rows = con.execute('''
         SUM(d.unit_count) AS units
     FROM dhcd_new_housing d
     LEFT JOIN town_lookup t ON UPPER(d.town_name_title)=UPPER(t.townname_title)
-    WHERE d.year_built BETWEEN 2016 AND 2025
+    WHERE d.year_built BETWEEN {START_YEAR} AND {END_YEAR}
       AND LOWER(COALESCE(d.site_type,'')) NOT IN (
           'camp','seasonal home','seasonal camp','camp/seasonal home','seasonal')
     GROUP BY tier, bucket
@@ -97,7 +99,7 @@ rural_tier_total = sum(scale['rural'].values())
 rural_single_pct = round(scale['rural']['single'] / rural_tier_total * 100, 1) if rural_tier_total else 0
 
 # ── 3. Rural construction types (year-round only — seasonals fully excluded) ───
-type_rows = con.execute('''
+type_rows = con.execute(f'''
     SELECT
         CASE
             WHEN d.unit_count=1
@@ -113,7 +115,7 @@ type_rows = con.execute('''
         SUM(d.unit_count) AS units
     FROM dhcd_new_housing d
     LEFT JOIN town_lookup t ON UPPER(d.town_name_title)=UPPER(t.townname_title)
-    WHERE d.year_built BETWEEN 2016 AND 2025
+    WHERE d.year_built BETWEEN {START_YEAR} AND {END_YEAR}
       AND LOWER(COALESCE(t.urban_rural_tier,'rural'))='rural'
       AND LOWER(COALESCE(d.site_type,'')) NOT IN (
           'camp','seasonal home','seasonal camp','camp/seasonal home','seasonal')
@@ -163,7 +165,7 @@ exempt_summary_rows = con.execute(f'''
         SUM(unit_count) AS units
     FROM dhcd_new_housing
     WHERE in_exemption_area IS NOT NULL
-      AND year_built BETWEEN 2016 AND 2025
+      AND year_built BETWEEN {START_YEAR} AND {END_YEAR}
       {EXEMPT_SEASONAL_FILTER}
     GROUP BY in_exemption_area
     ORDER BY in_exemption_area DESC
@@ -182,7 +184,7 @@ exempt_type_rows = con.execute(f'''
         SUM(CASE WHEN in_exemption_area = 0 THEN unit_count ELSE 0 END) AS outside_units
     FROM dhcd_new_housing
     WHERE in_exemption_area IS NOT NULL
-      AND year_built BETWEEN 2016 AND 2025
+      AND year_built BETWEEN {START_YEAR} AND {END_YEAR}
       {EXEMPT_SEASONAL_FILTER}
     GROUP BY site_type_general
     ORDER BY (inside_units + outside_units) DESC
@@ -209,7 +211,7 @@ exempt_year_rows = con.execute(f'''
         SUM(CASE WHEN in_exemption_area = 0 THEN unit_count ELSE 0 END) AS outside_units
     FROM dhcd_new_housing
     WHERE in_exemption_area IS NOT NULL
-      AND year_built BETWEEN 2016 AND 2025
+      AND year_built BETWEEN {START_YEAR} AND {END_YEAR}
       {EXEMPT_SEASONAL_FILTER}
     GROUP BY yr
     ORDER BY yr
@@ -226,7 +228,7 @@ avg_vs_lower_pct     = round(avg_annual / STATE_TARGET_LOWER * 100)
 avg_vs_upper_pct     = round(avg_annual / STATE_TARGET_UPPER * 100)
 target_multiple      = round(STATE_TARGET_LOWER / avg_annual, 1)
 
-PROJ_YEARS           = list(range(2026, 2031))
+PROJ_YEARS           = list(range(PROJ_START_YEAR, PROJ_END_YEAR + 1))
 chart_all_labels     = [str(y) for y in years] + [str(y) for y in PROJ_YEARS]
 chart_hist_inside    = exempt_year_inside  + [None] * len(PROJ_YEARS)
 chart_hist_outside   = exempt_year_outside + [None] * len(PROJ_YEARS)
@@ -234,9 +236,9 @@ chart_proj_inside    = [None] * len(years) + [proj_annual_inside]  * len(PROJ_YE
 chart_proj_outside   = [None] * len(years) + [proj_annual_outside] * len(PROJ_YEARS)
 
 # ── Total seasonal permits excluded (for disclaimer) ──────────────────────
-seasonal_excluded = int(con.execute('''
+seasonal_excluded = int(con.execute(f'''
     SELECT SUM(unit_count) FROM dhcd_new_housing
-    WHERE year_built BETWEEN 2016 AND 2025
+    WHERE year_built BETWEEN {START_YEAR} AND {END_YEAR}
       AND LOWER(COALESCE(site_type,'')) IN (
           'camp','seasonal home','seasonal camp','camp/seasonal home','seasonal')
 ''').fetchone()[0] or 0)
@@ -601,7 +603,7 @@ html = f"""<!DOCTYPE html>
 </div>
 
 <div class="disclaimer-bar">
-  <strong>Note:</strong> This is a rapidly developed overview of broad statewide trends using publicly available data — a napkin sketch, not a rigorous research project. Numbers should be understood as directionally informative, not authoritative. Do not cite specific figures as canonical fact without independent verification against the underlying sources linked in the methodology section. <strong>Seasonal and camp structures ({seasonal_excluded:,} permits, 2016–2025) are excluded from all data in this analysis.</strong>
+  <strong>Note:</strong> This is a rapidly developed overview of broad statewide trends using publicly available data — a napkin sketch, not a rigorous research project. Numbers should be understood as directionally informative, not authoritative. Do not cite specific figures as canonical fact without independent verification against the underlying sources linked in the methodology section. <strong>Seasonal and camp structures ({seasonal_excluded:,} permits, {START_YEAR}–{END_YEAR}) are excluded from all data in this analysis.</strong>
 </div>
 
 <div class="container">
@@ -610,12 +612,12 @@ html = f"""<!DOCTYPE html>
 <section>
   <h2>Vermont is building far less than it needs.</h2>
   <div class="intro">
-    <p>Vermont's Act 47 (2023) sets an annual housing production target of <strong>{STATE_TARGET_LOWER:,}–{STATE_TARGET_UPPER:,} units per year</strong>. The lower bound is the minimum needed to keep pace with demand; the upper bound would make meaningful progress on the existing shortage. Since 2016, Vermont has averaged {avg_annual:,} units/year — about {avg_vs_lower_pct}% of the minimum target.</p>
-    <p>There's also a geographic mismatch. Vermont's Act 181 growth area framework intends future development to concentrate inside designated centers — VAPDA projects 60% of future housing will be built inside those areas. Yet only <strong>{exempt_inside_pct}%</strong> of production since 2016 landed inside growth areas. The chart below shows both gaps at once: the production shortfall and the geographic split.</p>
+    <p>Vermont's Act 47 (2023) sets an annual housing production target of <strong>{STATE_TARGET_LOWER:,}–{STATE_TARGET_UPPER:,} units per year</strong>. The lower bound is the minimum needed to keep pace with demand; the upper bound would make meaningful progress on the existing shortage. Since {START_YEAR}, Vermont has averaged {avg_annual:,} units/year — about {avg_vs_lower_pct}% of the minimum target.</p>
+    <p>There's also a geographic mismatch. Vermont's Act 181 growth area framework intends future development to concentrate inside designated centers — VAPDA projects 60% of future housing will be built inside those areas. Yet only <strong>{exempt_inside_pct}%</strong> of production since {START_YEAR} landed inside growth areas. The chart below shows both gaps at once: the production shortfall and the geographic split.</p>
   </div>
 
   <div class="chart-wrap">
-    <div class="chart-label">Annual Housing Units — 2016–2025 Actual, 2026–2030 Illustrative Target</div>
+    <div class="chart-label">Annual Housing Units — {START_YEAR}–{END_YEAR} Actual, {PROJ_START_YEAR}–{PROJ_END_YEAR} Illustrative Target</div>
     <div class="chart-container h300">
       <canvas id="annualChart"></canvas>
     </div>
@@ -623,7 +625,7 @@ html = f"""<!DOCTYPE html>
   </div>
   <div class="note">
     <strong>Shaded band:</strong> Vermont's annual target range of {STATE_TARGET_LOWER:,}–{STATE_TARGET_UPPER:,} units/year.
-    <strong>Lighter bars (2026–2030):</strong> Illustrative target-level production using the VAPDA-projected 60/40 inside/outside split — {proj_annual_inside:,} units inside and {proj_annual_outside:,} outside growth areas per year.
+    <strong>Lighter bars ({PROJ_START_YEAR}–{PROJ_END_YEAR}):</strong> Illustrative target-level production using the VAPDA-projected 60/40 inside/outside split — {proj_annual_inside:,} units inside and {proj_annual_outside:,} outside growth areas per year.
     Reaching the lower bound would require roughly {target_multiple}× current production.
   </div>
 </section>
@@ -632,12 +634,12 @@ html = f"""<!DOCTYPE html>
 <section>
   <h2>Rural Vermont accounts for about {rural_pct}% of the state's housing production.</h2>
   <div class="intro">
-    <p>Vermont's 180 rural towns — covering the vast majority of the state's land area — collectively produce more new housing than urban Vermont's 13 designated urban centers. Together, rural and suburban communities outside of urban centers are responsible for {non_urban_pct}% of all new homes built since 2016.</p>
+    <p>Vermont's 180 rural towns — covering the vast majority of the state's land area — collectively produce more new housing than urban Vermont's 13 designated urban centers. Together, rural and suburban communities outside of urban centers are responsible for {non_urban_pct}% of all new homes built since {START_YEAR}.</p>
     <p>That production is spread thinly. Nearly every rural permit is a single home, built one at a time, by individual families, contractors, and small developers.</p>
   </div>
 
   <div class="chart-wrap">
-    <div class="chart-label">Share of All Statewide Units by Project Size and Community Type (2016–2025)</div>
+    <div class="chart-label">Share of All Statewide Units by Project Size and Community Type ({START_YEAR}–{END_YEAR})</div>
     <div class="chart-container h160">
       <canvas id="scaleChart"></canvas>
     </div>
@@ -652,11 +654,11 @@ html = f"""<!DOCTYPE html>
 <section>
   <h2>Rural housing is overwhelmingly single-family.</h2>
   <div class="intro">
-    <p>Of all year-round rural housing permits from 2016 to 2025, <strong>{rural_sfh_pct}%</strong> are single-family homes — built one at a time, on individual lots, by families, small contractors, and local builders. Multi-family construction and other residential types together make up a small share of rural output.</p>
+    <p>Of all year-round rural housing permits from {START_YEAR} to {END_YEAR}, <strong>{rural_sfh_pct}%</strong> are single-family homes — built one at a time, on individual lots, by families, small contractors, and local builders. Multi-family construction and other residential types together make up a small share of rural output.</p>
   </div>
 
   <div class="chart-wrap">
-    <div class="chart-label">Rural Housing Permits by Type — 2016–2025 (year-round permits only)</div>
+    <div class="chart-label">Rural Housing Permits by Type — {START_YEAR}–{END_YEAR} (year-round permits only)</div>
     <div class="chart-container h200">
       <canvas id="typeChart"></canvas>
     </div>
@@ -683,7 +685,7 @@ html = f"""<!DOCTYPE html>
   <h2>About {exempt_outside_pct}% of new housing was built outside Vermont's designated growth areas.</h2>
   <div class="intro">
     <p>Vermont's Act 181 (2024) designates a set of "growth areas" — downtown districts, town centers, village centers, and transit corridors — where new development is meant to be concentrated and permitting streamlined. Using the state's temporary exemption maps (the operative growth-area boundaries now in effect), we can test how well the past decade of housing production actually aligns with those goals.</p>
-    <p>The answer: most of it doesn't. Of {exempt_total_units:,} year-round units built from 2016 to 2025, <strong>{exempt_inside_pct}% fall inside designated growth areas</strong> and {exempt_outside_pct}% fall outside them. The split is not random — it tracks almost perfectly with housing type.</p>
+    <p>The answer: most of it doesn't. Of {exempt_total_units:,} year-round units built from {START_YEAR} to {END_YEAR}, <strong>{exempt_inside_pct}% fall inside designated growth areas</strong> and {exempt_outside_pct}% fall outside them. The split is not random — it tracks almost perfectly with housing type.</p>
   </div>
 
   <div class="callouts">
@@ -707,7 +709,7 @@ html = f"""<!DOCTYPE html>
 
   <h3>Housing type tells the story</h3>
   <div class="chart-wrap">
-    <div class="chart-label">Units Inside vs. Outside Growth Areas by Housing Type — 2016–2025</div>
+    <div class="chart-label">Units Inside vs. Outside Growth Areas by Housing Type — {START_YEAR}–{END_YEAR}</div>
     <div class="chart-container h240">
       <canvas id="exemptTypeChart"></canvas>
     </div>
@@ -719,7 +721,7 @@ html = f"""<!DOCTYPE html>
 
   <h3>Year-by-year: inside vs. outside growth areas</h3>
   <div class="chart-wrap">
-    <div class="chart-label">Annual Units by Growth Area Status — 2016–2025</div>
+    <div class="chart-label">Annual Units by Growth Area Status — {START_YEAR}–{END_YEAR}</div>
     <div class="chart-container h240">
       <canvas id="exemptYearChart"></canvas>
     </div>
@@ -735,10 +737,10 @@ html = f"""<!DOCTYPE html>
   <h2>Data &amp; Methodology</h2>
 
   <h3>DHCD New Housing Database</h3>
-  <p class="intro">The Vermont Department of Housing &amp; Community Development (DHCD), in partnership with the Vermont Center for Geographic Information (VCGI), tracks new residential housing completions statewide, derived primarily from E911 site records. Data is published as the <em>VT New Housing Units view</em> ArcGIS feature service (<code>VT_New_Housing_Units_view</code>, hosted by VCGI on ArcGIS Online) and is accessible via the DHCD Housing Development Dashboard at HousingData.org. Coverage begins in 2016. Each record is a single E911 site address with a unit count, coordinates, and a <code>YEARBUILT</code> field.</p>
+  <p class="intro">The Vermont Department of Housing &amp; Community Development (DHCD), in partnership with the Vermont Center for Geographic Information (VCGI), tracks new residential housing completions statewide, derived primarily from E911 site records. Data is published as the <em>VT New Housing Units view</em> ArcGIS feature service (<code>VT_New_Housing_Units_view</code>, hosted by VCGI on ArcGIS Online) and is accessible via the DHCD Housing Development Dashboard at HousingData.org. Coverage begins in {START_YEAR}. Each record is a single E911 site address with a unit count, coordinates, and a <code>YEARBUILT</code> field.</p>
 
   <h3>Seasonal and camp structures</h3>
-  <p class="intro">Permits classified as seasonal or camp structures are <strong>excluded entirely from all data and charts in this analysis.</strong> This affects {seasonal_excluded:,} permits in the 2016–2025 study period. These structures do not contribute to Vermont's year-round housing supply. Identifying these permits by their DHCD <code>site_type</code> field: the three values filtered out are <em>CAMP</em>, <em>SEASONAL HOME</em>, and <em>SEASONAL CAMP</em>.</p>
+  <p class="intro">Permits classified as seasonal or camp structures are <strong>excluded entirely from all data and charts in this analysis.</strong> This affects {seasonal_excluded:,} permits in the {START_YEAR}–{END_YEAR} study period. These structures do not contribute to Vermont's year-round housing supply. Identifying these permits by their DHCD <code>site_type</code> field: the three values filtered out are <em>CAMP</em>, <em>SEASONAL HOME</em>, and <em>SEASONAL CAMP</em>.</p>
 
   <h3>How community types are assigned</h3>
   <p class="intro">Every permitted structure is classified by the community type of the municipality in which it was permitted, using 2020 Census population and population density (residents per km², computed using Vermont State Plane EPSG:32145 projection). The three tiers and their thresholds are:</p>
@@ -781,7 +783,7 @@ html = f"""<!DOCTYPE html>
   <details>
     <summary>DHCD site_type mapping table</summary>
     <div class="details-body">
-      <p>The construction type chart uses this classification for all rural year-round permits. The unit count rule applies on top of the type name: any permit with 2 or more units is always counted as Multi-Family / Condo regardless of its <code>site_type</code> label. Single-unit permits are classified by type name pattern. Note: the permit and unit counts below cover all Vermont municipalities across 2016–2025, not only rural towns.</p>
+      <p>The construction type chart uses this classification for all rural year-round permits. The unit count rule applies on top of the type name: any permit with 2 or more units is always counted as Multi-Family / Condo regardless of its <code>site_type</code> label. Single-unit permits are classified by type name pattern. Note: the permit and unit counts below cover all Vermont municipalities across {START_YEAR}–{END_YEAR}, not only rural towns.</p>
       <div class="table-wrap">
         <table>
           <thead>
@@ -829,7 +831,7 @@ html = f"""<!DOCTYPE html>
 <section id="map-section">
 <div class="container">
   <h2>Where Projects Are Being Built</h2>
-  <p>Each dot represents a DHCD-recorded housing project (2016&ndash;2025). Projects are split into two independent cluster groups&mdash;inside and outside Act&nbsp;181 exemption areas&mdash;so clusters never mix the two. Zoom in to explore individual projects; click any dot for details.</p>
+  <p>Each dot represents a DHCD-recorded housing project ({START_YEAR}&ndash;{END_YEAR}). Projects are split into two independent cluster groups&mdash;inside and outside Act&nbsp;181 exemption areas&mdash;so clusters never mix the two. Zoom in to explore individual projects; click any dot for details.</p>
 
   <div id="vt-map"></div>
 
@@ -845,13 +847,13 @@ html = f"""<!DOCTYPE html>
 </section>
 
 <footer>
-  <p>Analysis by <strong style="color:#fff;">Let's Build Homes</strong> · Data current through 2025</p>
+  <p>Analysis by <strong style="color:#fff;">Let's Build Homes</strong> · Data current through {END_YEAR}</p>
   <p style="margin-top:0.3rem;"><a href="#methodology">Methodology &amp; Sources</a></p>
 </footer>
 
 <script>
 // Data embedded from housing_dev.db at generation time
-const YEARS               = {json.dumps(annual_labels)};   // 2016–2025, used by exemptYearChart
+const YEARS               = {json.dumps(annual_labels)};   // {START_YEAR}–{END_YEAR}, used by exemptYearChart
 const SCALE_PCT           = {json.dumps(scale_pct)};
 const TYPE_LABELS         = {json.dumps(type_labels)};
 const TYPE_UNITS          = {json.dumps(type_units)};
