@@ -33,7 +33,7 @@ build: $(OUTPUT)/blog.html
 
 blog: build
 
-$(OUTPUT)/blog.html: generate_blog.py housing_dev.db blog-draft.md | $(OUTPUT)
+$(OUTPUT)/blog.html: generate_blog.py housing_dev.db | $(OUTPUT)
 	/opt/homebrew/bin/uv run python3 generate_blog.py
 	@echo "Note: map requires output/*.geojson — run 'make map_data' if needed"
 
