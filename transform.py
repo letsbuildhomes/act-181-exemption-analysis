@@ -6,10 +6,11 @@ Reads data/dhcd_housing.csv and produces housing.db with a single table
 
 Steps:
   1. Load and clean the raw DHCD CSV
-  2. Drop seasonal records (they never enter the DB)
-  3. Union the five Act 181 exemption-area GeoJSON layers
-  4. Run point-in-polygon test → in_exemption_area (1/0/NULL)
-  5. Write to housing.db
+  2. Drop records with missing or non-positive unit counts
+  3. Drop seasonal records (they never enter the DB)
+  4. Union the five Act 181 exemption-area GeoJSON layers
+  5. Run point-in-polygon test → in_exemption_area (1/0/NULL)
+  6. Write to housing.db
 """
 
 import os
@@ -74,7 +75,14 @@ for c in ["unit_count", "year_built"]:
 for c in ["latitude", "longitude"]:
     df[c] = pd.to_numeric(df[c], errors="coerce")
 
-# ── 2. Drop seasonal records entirely ────────────────────────────────────────
+# ── 2. Drop records with missing or non-positive unit counts ────────────────
+
+before = len(df)
+df = df[df["unit_count"].notna() & (df["unit_count"] > 0)]
+dropped = before - len(df)
+print(f"  Dropped {dropped:,} records with missing or non-positive unit counts")
+
+# ── 3. Drop seasonal records entirely ────────────────────────────────────────
 
 before = len(df)
 df = df[~df["site_type"].str.strip().str.lower().isin(SEASONAL)]
@@ -82,7 +90,7 @@ dropped = before - len(df)
 print(f"  Dropped {dropped:,} seasonal records (will not appear in housing.db)")
 print(f"  Remaining: {len(df):,} records")
 
-# ── 3. Load and union exemption-area layers ───────────────────────────────────
+# ── 4. Load and union exemption-area layers ───────────────────────────────────
 
 print("\nLoading exemption-area GeoJSON layers...")
 gdfs = []
@@ -98,7 +106,7 @@ all_geoms = gpd.GeoDataFrame(
 exemption_union = unary_union(all_geoms.geometry)
 print(f"  Unioned {len(all_geoms)} features into single geometry")
 
-# ── 4. Point-in-polygon test ──────────────────────────────────────────────────
+# ── 5. Point-in-polygon test ──────────────────────────────────────────────────
 
 print("\nRunning point-in-polygon test...")
 df = df.reset_index(drop=True)
@@ -122,7 +130,7 @@ print(f"  Inside:  {inside:,}")
 print(f"  Outside: {outside:,}")
 print(f"  Missing coords (in_exemption_area=NULL): {missing:,}")
 
-# ── 5. Write to housing.db ────────────────────────────────────────────────────
+# ── 6. Write to housing.db ────────────────────────────────────────────────────
 
 print(f"\nWriting to {DB}...")
 if os.path.exists(DB):

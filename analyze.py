@@ -11,6 +11,7 @@ Usage:
     python3 analyze.py
 """
 
+import math
 import json
 import os
 import sqlite3
@@ -169,11 +170,16 @@ proj_annual_inside  = round(target_mid * VAPDA_INSIDE_PCT)
 proj_annual_outside = round(target_mid * (1 - VAPDA_INSIDE_PCT))
 proj_years          = list(range(PROJ_START_YEAR, PROJ_END_YEAR + 1))
 
-all_labels     = [str(y) for y in years] + [str(y) for y in proj_years]
+all_labels      = [str(y) for y in years] + [str(y) for y in proj_years]
+# Mark the most recent historical year as provisional
+all_labels[len(years) - 1] = f"{END_YEAR}*"
+
 chart_h_inside  = hist_inside  + [None] * len(proj_years)
 chart_h_outside = hist_outside + [None] * len(proj_years)
 chart_p_inside  = [None] * len(years) + [proj_annual_inside]  * len(proj_years)
 chart_p_outside = [None] * len(years) + [proj_annual_outside] * len(proj_years)
+
+proj_start_idx = len(years)  # first x-axis index belonging to target bars
 
 # ── 4. Build GeoJSON files ────────────────────────────────────────────────────
 
@@ -200,13 +206,14 @@ print(f"  Written: exemption_union.geojson ({os.path.getsize(os.path.join(OUTPUT
 print("Building DHCD point GeoJSON files...")
 con = sqlite3.connect(DB)
 con.row_factory = sqlite3.Row
-point_rows = con.execute("""
+point_rows = con.execute(f"""
     SELECT latitude, longitude, site_type_general, unit_count, year_built,
            address, affordable, in_exemption_area
     FROM housing
     WHERE latitude IS NOT NULL
       AND longitude IS NOT NULL
       AND in_exemption_area IS NOT NULL
+      AND year_built BETWEEN {START_YEAR} AND {END_YEAR}
 """).fetchall()
 con.close()
 
@@ -221,7 +228,7 @@ for r in point_rows:
         },
         "properties": {
             "type":       r["site_type_general"] or "Other",
-            "units":      int(r["unit_count"] or 1),
+            "units":      int(r["unit_count"]),
             "year":       int(r["year_built"] or 0),
             "addr":       r["address"] or "",
             "affordable": 1 if str(r["affordable"] or "").upper() == "YES" else 0,
@@ -310,6 +317,11 @@ chart_h_inside_js      = json.dumps(chart_h_inside)
 chart_h_outside_js     = json.dumps(chart_h_outside)
 chart_p_inside_js      = json.dumps(chart_p_inside)
 chart_p_outside_js     = json.dumps(chart_p_outside)
+target_lower_js        = STATE_TARGET_LOWER
+target_upper_js        = STATE_TARGET_UPPER
+proj_start_idx_js      = proj_start_idx
+# Y-axis max: upper target + 8% headroom so error bar tops are always inside the chart
+y_axis_max_js = math.ceil(STATE_TARGET_UPPER / 1000) * 1000
 
 type_labels_js    = json.dumps([TYPE_DISPLAY.get(t, t) for t in types_ordered])
 type_inside_js    = json.dumps([type_inside.get(t, 0)  for t in types_ordered])
@@ -322,7 +334,7 @@ html = f"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Vermont Housing Production: Tier 1 Exemption Area Analysis</title>
+<title>Vermont Housing Production: Act 181 Temporary Exemption Area Analysis</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
@@ -406,7 +418,7 @@ html = f"""<!DOCTYPE html>
     margin-bottom: 0.6rem;
   }}
   .chart-container {{ position: relative; }}
-  .chart-container.h340 {{ height: 340px; }}
+  .chart-container.h340 {{ height: clamp(320px, 42vh, 520px); }}
   .chart-container.h260 {{ height: 260px; }}
   .table-wrap {{ overflow-x: auto; margin: 1.2rem 0; }}
   table {{ width: 100%; border-collapse: collapse; font-size: 0.875rem; font-family: system-ui, sans-serif; }}
@@ -451,14 +463,14 @@ html = f"""<!DOCTYPE html>
 <body>
 
 <nav>
-  <span class="nav-logo">Vermont Housing Development</span>
-  <span class="nav-sub">Tier 1 Exemption Area Analysis · {START_YEAR}–{END_YEAR}</span>
+  <span class="nav-logo">Let's Build Homes</span>
+  <span class="nav-sub">Act 181 Temporary Exemption Area Analysis · {START_YEAR}–{END_YEAR}</span>
 </nav>
 
 <div class="hero">
-  <h1>Vermont New Housing Production:<br>Inside vs. Outside Tier 1 Areas</h1>
+  <h1>Vermont New Housing Production:<br>Inside vs. Outside Temporary Exemption Areas</h1>
   <p>Unit counts from the DHCD housing database ({START_YEAR}–{END_YEAR}), classified by
-     whether each site falls within Vermont's Act 181 tier 1 exemption area boundaries.</p>
+     whether each site falls within Vermont's Act 181 temporary exemption area boundaries.</p>
 </div>
 
 <div class="container">
@@ -466,19 +478,20 @@ html = f"""<!DOCTYPE html>
 <!-- ── Section 1: Annual Production ──────────────────────────────────────── -->
 <section>
   <h2>Annual Housing Production, {START_YEAR}–{END_YEAR}</h2>
-  <p class="intro">The following chart shows the total number of housing units permitted
-  each year, split by whether the site is inside or outside the Act 181 tier 1
-  exemption areas. The shaded bars for {PROJ_START_YEAR}–{PROJ_END_YEAR} show projected
-  production based on the Act 47 (2023) statewide housing target range
-  ({STATE_TARGET_LOWER:,}–{STATE_TARGET_UPPER:,} units/year), with the VAPDA estimate
-  that {round(VAPDA_INSIDE_PCT*100)}% of future housing will be built inside growth areas.
+  <p class="intro">The following chart shows the total number of housing units built
+  each year, split by whether the site is inside or outside the Act 181 temporary
+  exemption areas. The lighter bars for {PROJ_START_YEAR}–{PROJ_END_YEAR} show the
+  Act 47 (2023) statewide housing targets ({STATE_TARGET_LOWER:,}–{STATE_TARGET_UPPER:,}
+  units/year), with the VAPDA estimate that {round(VAPDA_INSIDE_PCT*100)}% of future
+  housing will be built inside growth areas. Error bars show the full target range.
   Data source: DHCD Vermont New Housing database.</p>
 
   <div class="chart-wrap">
-    <div class="chart-label">Annual units — inside vs. outside exemption areas (with {PROJ_START_YEAR}–{PROJ_END_YEAR} projections)</div>
+    <div class="chart-label">Annual units — inside vs. outside temporary exemption areas ({PROJ_START_YEAR}–{PROJ_END_YEAR} bars show Act 47 targets)</div>
     <div class="chart-container h340">
       <canvas id="annualChart"></canvas>
     </div>
+    <p style="font-size:0.78rem;color:#999;font-family:system-ui,sans-serif;margin-top:0.4rem;">* {END_YEAR} data may not be final.</p>
   </div>
 
   <h3>Year-by-year breakdown</h3>
@@ -510,7 +523,7 @@ html = f"""<!DOCTYPE html>
   same breakdown for each year individually.</p>
 
   <div class="chart-wrap">
-    <div class="chart-label">Total units by type — inside vs. outside exemption areas ({START_YEAR}–{END_YEAR})</div>
+    <div class="chart-label">Total units by type — inside vs. outside temporary exemption areas ({START_YEAR}–{END_YEAR})</div>
     <div class="chart-container h260">
       <canvas id="typeChart"></canvas>
     </div>
@@ -541,8 +554,8 @@ html = f"""<!DOCTYPE html>
 <section>
   <h2>Geographic Distribution</h2>
   <p class="intro">Each point represents a housing site from the DHCD database
-  ({START_YEAR}–{END_YEAR}). The green shaded polygon shows the union of all five Act 181
-  tier 1 exemption area layers. Points are colored by housing type; cluster circles show
+  for years {START_YEAR}–{END_YEAR}. The blue shaded polygon shows the union of all five Act 181
+  temporary exemption area layers. Points are colored by exemption area inclusion; cluster circles show
   the total unit count across all sites in that cluster. Use the layer toggle (top right)
   to show or hide inside/outside groups. Sites missing coordinates are excluded from the
   map.</p>
@@ -554,19 +567,24 @@ html = f"""<!DOCTYPE html>
 <section class="data-notes">
   <h2>Data Notes</h2>
   <p><strong>Primary data source:</strong> Vermont DHCD New Housing database, downloaded
-  from the Vermont ArcGIS REST API (Vermont_New_Housing FeatureServer). Analysis covers
-  permit years {START_YEAR}–{END_YEAR}.</p>
+  from the Vermont ArcGIS REST API (<a href="https://www.arcgis.com/home/item.html?id=4f37b1d984274ee398bfa9a93c5b8c19#data">Vermont_New_Housing FeatureServer</a>).
+  Before analysis, we exclude all data flagged as "Pre 2016: Likely". Analysis covers
+  years {START_YEAR}–{END_YEAR}.</p>
 
   <p><strong>Seasonal exclusions:</strong> The following site types are excluded from
-  all analysis and do not appear in the database: {seasonal_list}.</p>
+  all analysis and do not appear in the analysis database: {seasonal_list}.</p>
 
-  <p><strong>Records missing coordinates:</strong> {missing_coords:,} records in the
+  <p><strong>Unit-count exclusions:</strong> Records with missing <code>unit_count</code>
+  values or non-positive unit counts are excluded from the analysis database and do not
+  appear in any totals, charts, tables, or map layers.</p>
+
+  {f'''<p><strong>Records missing coordinates:</strong> {missing_coords:,} records in the
   full database have no latitude/longitude and are therefore excluded from the map
   and from the inside/outside exemption area classification. They are not included in
-  any unit count totals shown above.</p>
+  any unit count totals shown above.</p>''' if missing_coords > 0 else ''}
 
   <p><strong>Exemption area definition:</strong> "Inside the exemption area" means a
-  site's coordinates fall within the union of the following five Act 181 tier 1
+  site's coordinates fall within the union of the following five Act 181 temporary
   exemption-area layers:</p>
   <ul>
     {exemption_layer_list}
@@ -574,65 +592,116 @@ html = f"""<!DOCTYPE html>
 
   <p><strong>Housing type classification:</strong> Types are taken directly from the
   <code>SiteType_General</code> field in the DHCD source data. No custom remapping
-  is applied.</p>
+  is applied. Per DHCD's own categorization: single family dwellings include
+  manufactured (mobile) homes, multi-family includes units in structures with more
+  than one unit, and "Other Residential" are primarily accessory apartments.</p>
 
-  <p><strong>Projection methodology:</strong> The {PROJ_START_YEAR}–{PROJ_END_YEAR}
-  projected bars use the midpoint of the Act 47 (2023) statewide housing target
+  <p><strong>Target methodology:</strong> The {PROJ_START_YEAR}–{PROJ_END_YEAR}
+  target bars show the midpoint of the Act 47 (2023) statewide housing target
   ({STATE_TARGET_LOWER:,}–{STATE_TARGET_UPPER:,} units/year =
   {round((STATE_TARGET_LOWER + STATE_TARGET_UPPER) / 2):,} units/year midpoint),
   split {round(VAPDA_INSIDE_PCT*100)}/{round((1-VAPDA_INSIDE_PCT)*100)} inside/outside
-  per the VAPDA estimate. These are illustrative targets, not forecasts.</p>
+  per the VAPDA estimate. Error bars show the full lower–upper target range.
+  These are targets, not forecasts.</p>
 </section>
 
 </div><!-- /container -->
 
 <footer>
-  Vermont Housing Development Analysis &mdash; Data: DHCD Vermont New Housing Database &amp;
+  Let's Build Homes Analysis &mdash; Data: DHCD Vermont New Housing Database &amp;
   Vermont Act 181 Exemption Area GIS layers.
 </footer>
 
 <script>
 // ── Annual production chart (stacked vertical bar) ────────────────────────
 (function () {{
-  const labels   = {chart_labels_js};
-  const hInside  = {chart_h_inside_js};
-  const hOutside = {chart_h_outside_js};
-  const pInside  = {chart_p_inside_js};
-  const pOutside = {chart_p_outside_js};
+  const labels      = {chart_labels_js};
+  const hInside     = {chart_h_inside_js};
+  const hOutside    = {chart_h_outside_js};
+  const pInside     = {chart_p_inside_js};
+  const pOutside    = {chart_p_outside_js};
+  const targetLower = {target_lower_js};
+  const targetUpper = {target_upper_js};
+  const projStart   = {proj_start_idx_js};
+
+  // Custom plugin: draws I-beam error bars on each target-year bar showing
+  // the full Act 47 lower–upper target range.
+  const targetRangePlugin = {{
+    id: 'targetRange',
+    afterDraw(chart) {{
+      const {{ ctx, scales, data }} = chart;
+      const yScale = scales.y;
+      const yLow   = yScale.getPixelForValue(targetLower);
+      const yHigh  = yScale.getPixelForValue(targetUpper);
+      const capW   = 7;
+
+      // Dataset 2 is 'Inside (target)' — its non-null bars give us x positions
+      const meta = chart.getDatasetMeta(2);
+      data.datasets[2].data.forEach((val, i) => {{
+        if (val === null || val === undefined) return;
+        const bar = meta.data[i];
+        if (!bar) return;
+        const x = bar.x;
+
+        ctx.save();
+        ctx.strokeStyle = 'rgba(20,20,20,0.55)';
+        ctx.lineWidth   = 1.5;
+        ctx.setLineDash([]);
+
+        // Vertical stem
+        ctx.beginPath();
+        ctx.moveTo(x, yLow);
+        ctx.lineTo(x, yHigh);
+        ctx.stroke();
+        // Upper cap
+        ctx.beginPath();
+        ctx.moveTo(x - capW, yHigh);
+        ctx.lineTo(x + capW, yHigh);
+        ctx.stroke();
+        // Lower cap
+        ctx.beginPath();
+        ctx.moveTo(x - capW, yLow);
+        ctx.lineTo(x + capW, yLow);
+        ctx.stroke();
+
+        ctx.restore();
+      }});
+    }},
+  }};
 
   new Chart(document.getElementById('annualChart'), {{
     type: 'bar',
+    plugins: [targetRangePlugin],
     data: {{
       labels,
       datasets: [
         {{
           label:           'Inside (historical)',
           data:            hInside,
-          backgroundColor: '#074B41',
-          stack:           'hist',
+          backgroundColor: '#F2644A',
+          stack:           'units',
         }},
         {{
           label:           'Outside (historical)',
           data:            hOutside,
-          backgroundColor: '#8ED4DA',
-          stack:           'hist',
+          backgroundColor: '#074B41',
+          stack:           'units',
         }},
         {{
-          label:           'Inside (projected)',
+          label:           'Inside (target)',
           data:            pInside,
+          backgroundColor: 'rgba(242,100,74,0.35)',
+          borderColor:     '#F2644A',
+          borderWidth:     1.5,
+          stack:           'units',
+        }},
+        {{
+          label:           'Outside (target)',
+          data:            pOutside,
           backgroundColor: 'rgba(7,75,65,0.35)',
           borderColor:     '#074B41',
           borderWidth:     1.5,
-          borderDash:      [4, 3],
-          stack:           'proj',
-        }},
-        {{
-          label:           'Outside (projected)',
-          data:            pOutside,
-          backgroundColor: 'rgba(142,212,218,0.35)',
-          borderColor:     '#8ED4DA',
-          borderWidth:     1.5,
-          stack:           'proj',
+          stack:           'units',
         }},
       ],
     }},
@@ -649,7 +718,7 @@ html = f"""<!DOCTYPE html>
       }},
       scales: {{
         x: {{ stacked: true }},
-        y: {{ stacked: true, beginAtZero: true, ticks: {{ font: {{ family: 'system-ui' }} }} }},
+        y: {{ stacked: true, beginAtZero: true, max: {y_axis_max_js}, ticks: {{ font: {{ family: 'system-ui' }} }} }},
       }},
     }},
   }});
@@ -669,12 +738,12 @@ html = f"""<!DOCTYPE html>
         {{
           label:           'Inside exemption area',
           data:            inside,
-          backgroundColor: '#074B41',
+          backgroundColor: '#F2644A',
         }},
         {{
           label:           'Outside exemption area',
           data:            outside,
-          backgroundColor: '#8ED4DA',
+          backgroundColor: '#074B41',
         }},
       ],
     }},
@@ -709,63 +778,39 @@ html = f"""<!DOCTYPE html>
 
   new L.Control.FullScreen().addTo(map);
 
-  // Color by site_type_general
-  const TYPE_COLORS = {{
-    'SINGLE FAMILY DWELLING': '#F89C45',
-    'MULTI-FAMILY DWELLING':  '#8ED4DA',
-    'OTHER RESIDENTIAL':      '#F2644A',
-  }};
-  const TYPE_LABELS = {{
-    'SINGLE FAMILY DWELLING': 'Single Family',
-    'MULTI-FAMILY DWELLING':  'Multi Family',
-    'OTHER RESIDENTIAL':      'Other',
-  }};
-
-  function dotColor(type) {{
-    return TYPE_COLORS[type] || '#aaaaaa';
-  }}
-
-  // Cluster icon: sum of unit_count across child markers, log-scaled saturation
-  function makeClusterIcon(cluster, isInside) {{
-    const total = cluster.getAllChildMarkers()
-      .reduce((sum, m) => sum + (m._units || 1), 0);
-    const label = total >= 1000 ? (total / 1000).toFixed(1) + 'k' : String(total);
-    const size  = total >= 500 ? 44 : total >= 100 ? 36 : 30;
-    const t = Math.min(Math.log10(Math.max(total, 1)) / Math.log10(500), 1.0);
-    const bg = isInside
+  // Shared icon renderer — used for both clusters and individual markers
+  function makeIcon(units, isInside) {{
+    const label = units >= 1000 ? (units / 1000).toFixed(1) + 'k' : String(units);
+    const size  = units >= 500 ? 44 : units >= 100 ? 36 : units >= 50 ? 30 : units >= 20 ? 26 : units >= 5 ? 24 : units >= 2 ? 22 : 20;
+    const t     = Math.min(Math.log10(Math.max(units, 1)) / Math.log10(500), 1.0);
+    const bg    = isInside
       ? `hsl(10,${{Math.round(22 + t * 64)}}%,60%)`
       : `hsl(158,${{Math.round(15 + t * 50)}}%,42%)`;
     return L.divIcon({{
-      html: `<div style="width:${{size}}px;height:${{size}}px;background:${{bg}};color:#fff;
-        border-radius:50%;border:2px solid #fff;display:flex;align-items:center;
-        justify-content:center;font-family:system-ui,sans-serif;
-        font-size:${{size >= 40 ? 11 : 10}}px;font-weight:700;line-height:1;
-        box-shadow:0 1px 4px rgba(0,0,0,0.35);">${{label}}</div>`,
+      html: `<div style="width:${{size}}px;height:${{size}}px;background:${{bg}};color:#fff;border-radius:50%;border:2px solid #fff;display:flex;align-items:center;justify-content:center;font-family:system-ui,sans-serif;font-size:${{size >= 40 ? 11 : 10}}px;font-weight:700;line-height:1;box-shadow:0 1px 4px rgba(0,0,0,0.35)">${{label}}</div>`,
       className: '',
-      iconSize: L.point(size, size),
+      iconSize:   L.point(size, size),
       iconAnchor: L.point(size / 2, size / 2),
     }});
   }}
 
-  const insideCluster = L.markerClusterGroup({{
-    chunkedLoading: true, maxClusterRadius: 40,
-    iconCreateFunction: c => makeClusterIcon(c, true),
-  }});
-  const outsideCluster = L.markerClusterGroup({{
-    chunkedLoading: true, maxClusterRadius: 40,
-    iconCreateFunction: c => makeClusterIcon(c, false),
-  }});
+  function makeClusterIcon(cluster, isInside) {{
+    const total = cluster.getAllChildMarkers().reduce((s, m) => s + (m._units || 1), 0);
+    return makeIcon(total, isInside);
+  }}
+
+  const insideCluster  = L.markerClusterGroup({{ chunkedLoading: true, maxClusterRadius: 40, iconCreateFunction: c => makeClusterIcon(c, true)  }});
+  const outsideCluster = L.markerClusterGroup({{ chunkedLoading: true, maxClusterRadius: 40, iconCreateFunction: c => makeClusterIcon(c, false) }});
 
   function makeMarker(feature, isInside) {{
     const p      = feature.properties;
-    const color  = dotColor(p.type);
     const latlng = [feature.geometry.coordinates[1], feature.geometry.coordinates[0]];
-    const marker = L.circleMarker(latlng, {{
-      radius: 5, fillColor: color,
-      color: isInside ? '#ffffff' : '#333333',
-      weight: 1.5, fillOpacity: 0.88,
-    }});
-    const typeLabel = TYPE_LABELS[p.type] || (p.type || 'Other');
+    const marker = L.marker(latlng, {{ icon: makeIcon(p.units, isInside) }});
+    const typeLabel = {{
+      'MULTI-FAMILY DWELLING':  'Multi-Family',
+      'SINGLE FAMILY DWELLING': 'Single-Family',
+      'OTHER RESIDENTIAL':      'Other Residential',
+    }}[p.type] || (p.type || 'Other');
     marker._units = p.units;
     marker.bindPopup(
       `<b style="font-family:system-ui,sans-serif">${{p.addr || 'Address unknown'}}</b><br>
@@ -785,10 +830,10 @@ html = f"""<!DOCTYPE html>
     .then(r => r.json())
     .then(data => {{
       L.geoJSON(data, {{
-        style: {{ color: '#074B41', weight: 1.5, fillColor: '#074B41', fillOpacity: 0.12 }},
+        style: {{ color: '#1a0be6', weight: 1.5, fillColor: '#1a0be6', fillOpacity: 0.12 }}
       }}).addTo(map);
     }})
-    .catch(() => console.warn('exemption_union.geojson not found'));
+    .catch(() => console.warn('exemption_union.geojson not found — run make map_data'));
 
   Promise.all([
     fetch('dhcd_inside_exemption.geojson').then(r => r.json()),
@@ -802,7 +847,7 @@ html = f"""<!DOCTYPE html>
       'Inside exemption area':  insideCluster,
       'Outside exemption area': outsideCluster,
     }}, {{ collapsed: false }}).addTo(map);
-  }}).catch(() => console.warn('DHCD point GeoJSON files not found'));
+  }}).catch(() => console.warn('DHCD GeoJSON files not found — run make map_data'));
 }})();
 </script>
 </body>

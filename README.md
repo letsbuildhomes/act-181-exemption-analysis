@@ -1,95 +1,52 @@
-# Vermont Housing Production — Data Site
+# Vermont Housing Development Analysis
 
-A single-page data visualization site for Vermont legislators and the general public, produced by **Let's Build Homes**. It pulls directly from a local SQLite database at build time — no external API, no manual copy-paste.
-
-## Quick start
-
-```bash
-# Rebuild the site
-make
-
-# Open it
-open index.html
-```
-
-Requires Python 3 with the `sqlite3` standard library (no additional packages needed for `generate_site.py`).
-
----
-
-## Files
-
-| File | Purpose |
-|---|---|
-| `generate_site.py` | **Main generator.** Queries `housing_dev.db` and writes `index.html`. All chart data is embedded as JS constants at build time. |
-| `housing_dev.db` | SQLite database. Single source of truth for all charts and tables. |
-| `index.html` | Generated output. Open in any browser. Do not edit by hand — it will be overwritten on the next build. |
-| `Makefile` | Convenience wrapper. `make` rebuilds the site; `make clean` removes the output. |
-| `process_all.py` | **DB pipeline step 1.** Loads raw CSV/GeoJSON sources into `housing_dev.db`. Requires `pandas`, `geopandas`, `shapely`. |
-| `add_rural_urban.py` | **DB pipeline step 2.** Adds 2020 Census population, area, density, and Urban/Suburban/Rural tier classification to `town_lookup`. |
-| `build_project_clusters.py` | **DB pipeline step 3.** Groups DHCD single-family permits into likely developer subdivisions using ESITE parcel matches and DBSCAN spatial clustering. |
-| `vt_towns.geojson` | Vermont town boundaries (VCGI). Used by the DB pipeline for spatial joins. |
-| `vt_counties.geojson` | Vermont county boundaries (VCGI). Used by the DB pipeline. |
-
----
+Analyzes new housing construction in Vermont, focusing on how many units—and of what type—are being built inside vs. outside the state's Act 181 temporary exemption areas.
 
 ## Data sources
 
-- **DHCD New Housing Database** — Vermont Agency of Commerce & Community Development. Residential building permits statewide, 2016–present. Each record is one address with a unit count.
-  https://accd.vermont.gov/housing/plans-data-rules/dhcd-housing-data
+- **DHCD Vermont New Housing database** — build records of new residential construction, fetched from the Vermont ArcGIS REST API. The copy in `data/dhcd_housing.csv` can be refreshed with `make extract`.
+- **Act 181 temporary exemption-area GeoJSON files** (`data/exemption-areas/`) — five layers that together define Vermont's temporary exemption areas. These are static files checked into the repository.
 
-- **VCGI ESITE Layer** — Vermont Center for Geographic Information. Residential development sites with parcel category. Used to identify large single-family subdivisions that appear in DHCD as many individual 1-unit permits.
-  https://geodata.vermont.gov/datasets/VCGI::esite-development-sites-with-parcel-category/about
+## Pipeline
 
-- **2020 U.S. Census** (via VCGI) — Town-level population counts from county subdivision geography.
-  https://geodata.vermont.gov/datasets/VCGI::vt-census-2020-county-subdivisions-population-and-housing-units/about
+```
+extract.py      downloads data/dhcd_housing.csv from ArcGIS API
+transform.py    cleans CSV, runs point-in-polygon join → housing.db
+analyze.py      queries housing.db, writes output/index.html + GeoJSONs
+```
 
-- **State housing target: 8,237 units/year** — Set by Act 47 (2023).
-  https://legislature.vermont.gov/bill/status/2024/H.687
+Analysis covers years 2021–2025 (set in `config.py`).
 
-- **Act 181 (2024)** — Act 250 modernization / development tier system.
-  https://legislature.vermont.gov/bill/status/2024/S.100
+## Usage
 
----
+```bash
+# Build the report from existing data
+make
 
-## Community tier classification
+# Refresh the source data from the API, then rebuild
+make extract && make
 
-Towns are classified using 2020 Census population density (EPSG:32145 / Vermont State Plane):
+# Serve the report locally
+make serve
+# → open http://localhost:8000
+```
 
-| Tier | Criteria | Count |
-|---|---|---|
-| **Urban** | Population ≥ 5,000 AND density ≥ 100/km² | 13 towns |
-| **Suburban** | Population ≥ 2,500 OR density ≥ 40/km² | 62 towns |
-| **Rural** | All others | 180 towns |
+`make clean` removes `output/` and `housing.db`. `make rebuild` does a clean build from scratch.
 
-These tiers correspond to Act 181's Tier 1 (urban growth centers), Tier 2 (suburban/designated areas), and Tier 3 (rural) development review categories.
+## Output
 
----
+- `output/index.html` — HTML report with:
+  - Stacked bar chart of annual unit counts (inside/outside exemption areas), with Act 47 target bars for 2026–2030
+  - Horizontal bar chart breaking down units by housing type (Single Family / Multi Family / Other Residential)
+  - Interactive Leaflet map of sites in the analysis window, colored by type and clustered by inside/outside status
+  - Data notes explaining sources, exclusions, and methodology, including the exclusion of records with missing or non-positive unit counts
+- `output/exemption_union.geojson` — union of all five exemption-area layers (used by the map)
+- `output/dhcd_inside_exemption.geojson` / `dhcd_outside_exemption.geojson` — point data for the map
 
-## What "year-round" means
+## Dependencies
 
-Charts that show year-round production exclude permits classified as seasonal structures — camps, seasonal homes, vacation cabins. This does **not** mean the counted units are primary Vermont residences; many may be second homes or part-time residences. "Year-round" simply means the permit was not classified as a seasonal structure.
+```bash
+uv sync   # or: pip install -r requirements.txt
+```
 
----
-
-## Rebuilding the database from raw data
-
-If you need to update `housing_dev.db` with new source data:
-
-1. Place updated CSVs and GeoJSONs in a `raw_data/` directory (see `process_all.py` for expected filenames).
-2. Run the pipeline in order:
-   ```bash
-   python3 process_all.py        # load raw sources
-   python3 add_rural_urban.py    # add Census density tiers
-   python3 build_project_clusters.py  # identify subdivisions
-   ```
-3. Rebuild the site: `make`
-
-Pipeline scripts require: `pandas`, `geopandas`, `shapely`, `numpy`, `scikit-learn`.
-
----
-
-## Notes
-
-- The site uses [Chart.js 4.4.1](https://www.chartjs.org/) loaded from cdnjs. It requires an internet connection to render charts.
-- `index.html` is self-contained aside from that CDN dependency — no server needed, just open it in a browser.
-- All numbers should be understood as directionally informative. The DHCD database has known coverage gaps; ESITE parcel analysis is an approximation. Do not cite specific figures as authoritative without independent verification.
+Requires Python 3.10+, `pandas`, `geopandas`, `shapely`.

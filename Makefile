@@ -12,7 +12,7 @@
 
 .PHONY: all extract clean rebuild
 
-UV = /opt/homebrew/bin/uv run python3
+UV = uv run python3
 OUTPUT = output
 
 all: output/index.html
