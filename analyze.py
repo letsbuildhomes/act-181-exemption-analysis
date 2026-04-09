@@ -474,7 +474,7 @@ html = f"""<!DOCTYPE html>
 </div>
 
 <div class="container">
-
+<main>
 <!-- ── Section 1: Annual Production ──────────────────────────────────────── -->
 <section>
   <h2>Annual Housing Production, {START_YEAR}–{END_YEAR}</h2>
@@ -604,7 +604,7 @@ html = f"""<!DOCTYPE html>
   per the VAPDA estimate. Error bars show the full lower–upper target range.
   These are targets, not forecasts.</p>
 </section>
-
+</main>
 </div><!-- /container -->
 
 <footer>

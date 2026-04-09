@@ -5,10 +5,9 @@ __pycache__/
 
 # Generated outputs (reproducible via make)
 output/
-.stamps/
 
 # Generated database (reproducible via process_all.py)
-housing_dev.db
+*.db
 
 # SQLite transient files
 *.db-journal
