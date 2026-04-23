@@ -609,7 +609,8 @@ html = f"""<!DOCTYPE html>
 
 <footer>
   Let's Build Homes Analysis &mdash; Data: DHCD Vermont New Housing Database &amp;
-  Vermont Act 181 Exemption Area GIS layers.
+  Vermont Act 181 Exemption Area GIS layers. &mdash;
+  <a href="https://github.com/letsbuildhomes/act-181-exemption-analysis">View source on GitHub</a>
 </footer>
 
 <script>
